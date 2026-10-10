@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { ROLE_TO_CHAR } from '../config'
-import { getSpritePath, useTheme, toggleTheme, getTheme, themedDisplayName } from '../theme'
+import { getSpritePath, useTheme, toggleTheme, getTheme, setTheme, themedDisplayName } from '../theme'
+import { FIRM } from '../firm'
 
 function getAvatarSrc(role: string, agentId?: string): string {
   const charBase = ROLE_TO_CHAR[role] ?? 'employee-3'
@@ -24,6 +25,18 @@ export interface ChatMessage {
 }
 
 const EMOJI_PICKER = ['👍', '👎', '😊', '🎉', '😡', '🔥', '💯']
+
+// Render http(s) links (e.g. desk reports) as clickable anchors
+const URL_RE = /(https?:\/\/[^\s]+)/g
+function linkify(text: string): React.ReactNode {
+  const parts = text.split(URL_RE)
+  if (parts.length === 1) return text
+  return parts.map((part, i) =>
+    /^https?:\/\//.test(part)
+      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="slack-link">{part.includes('/reports/') ? '📄 open report' : part}</a>
+      : <React.Fragment key={i}>{part}</React.Fragment>,
+  )
+}
 
 interface SlackChatProps {
   messages: ChatMessage[]
@@ -133,7 +146,7 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
     <div className="slack-panel">
       <div className="slack-header">
         <div className="slack-channel-icon">#</div>
-        <span className="slack-channel-name">office-general</span>
+        <span className="slack-channel-name">{getTheme() === 'office' ? 'trading-floor' : 'office-general'}</span>
         <div className="slack-header-right">
           <div className="slack-online-dot" />
           <span className="slack-online-count">{onlineCount}</span>
@@ -197,7 +210,7 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
                     </div>
                   )}
                   <div className={`slack-msg-text${msg.isSystem ? ' slack-system-text' : ''}`}>
-                    {msg.text}
+                    {linkify(msg.text)}
                   </div>
                   {msg.reactions && msg.reactions.length > 0 && (
                     <div className="slack-reactions">
@@ -249,8 +262,11 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
       <div className="slack-input-wrap">
         {showSlashHint && (
           <div className="slack-slash-hint">
+            <span className="slack-slash-cmd" title="Send a book to the desk: /portfolio AAPL 30%, MSFT 20%, TLT 30%, CASH 20% | moderate">/portfolio</span>
+            <span className="slack-slash-cmd">/desk</span>
+            <span className="slack-slash-cmd">/roster</span>
+            <span className="slack-slash-cmd">/reports</span>
             <span className="slack-slash-cmd">/status</span>
-            <span className="slack-slash-cmd">/agents</span>
             <span className="slack-slash-cmd">/help</span>
             <span className="slack-slash-cmd">/the-office</span>
           </div>
@@ -259,7 +275,7 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
           <input
             type="text"
             className="slack-input-field"
-            placeholder="Message #office-general"
+            placeholder={getTheme() === 'office' ? 'Message #trading-floor — try /portfolio AAPL 40%, MSFT 30%, TLT 30%' : 'Message #office-general'}
             value={inputText}
             onChange={e => {
               const val = e.target.value
@@ -274,11 +290,13 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
               if (e.key === 'Enter' && inputText.trim()) {
                 const trimmed = inputText.trim()
                 // Client-side slash commands — not sent to backend
-                if (trimmed === '/the-office' || trimmed === '/theoffice') {
+                if (trimmed === '/the-office' || trimmed === '/theoffice' || trimmed === '/trading-floor') {
                   toggleTheme()
                   const nowOn = getTheme() === 'office'
-                  onSendMessage?.(nowOn ? '🧻 Dunder Mifflin mode: ON. Identity theft is not a joke.' : '🔁 Office theme: OFF')
+                  onSendMessage?.(nowOn ? `📈 ${FIRM.name}: the trading floor is OPEN. Bears. Beets. Bear markets.` : '🔁 Trading floor theme: OFF')
                 } else {
+                  // The desk is staffed by the Office cast — make sure they're on screen
+                  if (/^\/(portfolio|book)\b/i.test(trimmed) && getTheme() !== 'office') setTheme('office')
                   onSendMessage?.(trimmed)
                 }
                 setInputText('')

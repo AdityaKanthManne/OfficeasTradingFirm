@@ -26,8 +26,18 @@ export const BOSS_NAME = bossName
 export const BOSS_COLOR = bossColor
 export const BOSS_EMOJI = bossEmoji
 
+import { EMPLOYEES } from './firm'
+
+// Generic (non-Office-theme) sprites for the trading desk roles — dealt round-robin
+const GENERIC_SPRITES = ['employee-1', 'employee-2', 'employee-3', 'dev-1', 'dev-2', 'Frontend-dev-1', 'security-audit-1', 'explore-1']
+const FIRM_ROLE_TO_CHAR: Record<string, string> = Object.fromEntries(
+  EMPLOYEES.filter(e => e.role !== 'boss' && e.role !== 'assistant')
+    .map((e, i) => [e.role, GENERIC_SPRITES[i % GENERIC_SPRITES.length]]),
+)
+
 // Map agent roles to character sprite base names (in /sprites/characters/)
 export const ROLE_TO_CHAR: Record<string, string> = {
+  ...FIRM_ROLE_TO_CHAR,
   'boss':                  bossSprite,
   'assistant':             'Claude-1',
   'debugger':              'dev-1',

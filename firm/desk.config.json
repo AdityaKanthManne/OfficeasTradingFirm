@@ -1,0 +1,9 @@
+{
+  "llm": "claude",
+  "model": "",
+  "liveResearch": false,
+  "marketData": "yahoo",
+  "concurrency": 3,
+  "timeoutSec": 150,
+  "paceMs": 2200
+}

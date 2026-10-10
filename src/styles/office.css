@@ -721,7 +721,9 @@
 }
 
 .slack-msg-system .slack-msg-content {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .slack-msg-system .slack-system-text {
@@ -1221,4 +1223,102 @@
   text-transform: uppercase;
   pointer-events: none;
   z-index: 3;
+}
+
+/* ===== Dunder Mifflin Capital — trading floor ===== */
+
+.slack-link {
+  color: #6cb6ff;
+  text-decoration: underline;
+  word-break: break-all;
+}
+.slack-link:hover { color: #9fd0ff; }
+
+.ticker-tape {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  background: rgba(6, 10, 8, 0.88);
+  border-bottom: 1px solid rgba(255, 176, 0, 0.35);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #ffb000;
+  z-index: 900;
+  overflow: hidden;
+}
+.ticker-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 10px 0 6px;
+  background: #10161f;
+  border-right: 1px solid rgba(255, 176, 0, 0.35);
+  font-weight: 700;
+  color: #e6edf3;
+  white-space: nowrap;
+}
+.ticker-status::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3fb950;
+}
+.ticker-status.running::before {
+  background: #ffb000;
+  animation: ticker-pulse 1s ease-in-out infinite;
+}
+.ticker-logo { height: 18px; width: auto; border-radius: 2px; }
+.ticker-track {
+  flex: 1;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
+.ticker-run {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: ticker-scroll 45s linear infinite;
+}
+.ticker-item { padding: 0 18px; }
+.ticker-item b { color: #e6edf3; font-weight: 700; }
+.ticker-up { color: #3fb950; }
+.ticker-down { color: #f85149; }
+.ticker-dim { color: #8b949e; }
+.ticker-report {
+  flex: none;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  background: #1f4e79;
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+}
+.ticker-report:hover { background: #2a6aa3; }
+
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@keyframes ticker-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-run { animation: none; }
+}
+
+/* Multi-line system notices (/portfolio help, desk status) wrap instead of clipping */
+.slack-msg-system .slack-system-text {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }

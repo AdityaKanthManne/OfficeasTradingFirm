@@ -212,17 +212,17 @@ export const DRAMA_CONVERSATIONS = [
 // Slack reactions that randomly appear on messages
 export const SLACK_REACTIONS = ['👍', '🔥', '💀', '😂', '🚀', '❤️', '👀', '💯', '🎉', '😅', '🤔', '⚡']
 
-// Dunder Mifflin themed events — used when Office theme is active
+// Dunder Mifflin Capital trading-floor events — used when the Office theme is active
 export const OFFICE_EVENTS: RandomOfficeEvent[] = [
   {
     id: 'fire-alarm-stress-relief',
-    name: 'FIRE! FIRE! FIRE!',
-    slackAnnouncement: '🔥 FIRE! FIRE! FIRE! (Dwight is teaching fire safety)',
+    name: 'FLASH CRASH DRILL',
+    slackAnnouncement: '🔥 FLASH CRASH! FLASH CRASH! (Dwight is teaching risk management)',
     duration: 6000,
     type: 'all-move',
     targetPosition: { x: 114, y: 105 },
-    managerMessage: 'The fire is shooting at us!',
-    agentMessages: ['FIRE!', 'oh my god oh my god', 'save Bandit!', 'I declare BANKRUPTCY!', 'get the defibrillator!'],
+    managerMessage: 'The market is shooting at us!',
+    agentMessages: ['SELL! SELL!', 'oh my god oh my god', 'save Bandit!', 'I declare BANKRUPTCY!', 'get the circuit breaker!'],
     sound: 'alarm',
   },
   {
@@ -238,7 +238,7 @@ export const OFFICE_EVENTS: RandomOfficeEvent[] = [
   {
     id: 'golden-ticket',
     name: 'Golden Ticket',
-    slackAnnouncement: '🎫 Five Golden Tickets hidden in reams of paper — 10% off!',
+    slackAnnouncement: '🎫 Five Golden Tickets hidden in trade confirms — 10% fee rebate!',
     duration: 4000,
     type: 'slack-only',
     managerMessage: 'It was my idea. It was all me.',
@@ -248,7 +248,7 @@ export const OFFICE_EVENTS: RandomOfficeEvent[] = [
   {
     id: 'jim-prank',
     name: 'Jim Pranks Dwight',
-    slackAnnouncement: '🥤 Someone put Dwight\'s stapler in jello again',
+    slackAnnouncement: '🥤 Someone put Dwight\'s trading keyboard in jello again',
     duration: 3500,
     type: 'slack-only',
     managerMessage: 'JIM!',
@@ -268,10 +268,10 @@ export const OFFICE_EVENTS: RandomOfficeEvent[] = [
   {
     id: 'schrute-bucks',
     name: 'Schrute Bucks',
-    slackAnnouncement: '💵 Dwight is issuing Schrute Bucks. 1/1000th of a cent.',
+    slackAnnouncement: '💵 Dwight launched Schrute Bucks as a stablecoin. Pegged to 1/1000th of a cent.',
     duration: 3000,
     type: 'slack-only',
-    agentMessages: ['what\'s the conversion rate?', 'do I look like I need extra incentive?', 'I\'ll take Stanley nickels instead', 'where\'s my raise?'],
+    agentMessages: ['what\'s the conversion rate?', 'Ryan wants to list it on WUPHF', 'I\'ll take Stanley nickels instead', 'is that SEC registered?'],
     sound: 'notification',
   },
   {
@@ -287,7 +287,7 @@ export const OFFICE_EVENTS: RandomOfficeEvent[] = [
   {
     id: 'printer-jam-dm',
     name: 'Sabre Printer Jam',
-    slackAnnouncement: '🖨️ The printer is on fire again. Literal fire.',
+    slackAnnouncement: '🖨️ The trade-confirm printer is on fire again. Literal fire.',
     duration: 4000,
     type: 'single-agent',
     targetPosition: { x: 424, y: 132 },
@@ -297,11 +297,11 @@ export const OFFICE_EVENTS: RandomOfficeEvent[] = [
   {
     id: 'dundies',
     name: 'The Dundies',
-    slackAnnouncement: '🏆 The Dundies are tonight!',
+    slackAnnouncement: '🏆 The Dundies are tonight! Best Sharpe Ratio goes to...',
     duration: 4000,
     type: 'slack-only',
     managerMessage: 'You\'re gonna laugh, you\'re gonna cry...',
-    agentMessages: ['Bushiest Beaver award time', 'Please no again', 'dibs on Best Dad', 'I\'m taking Pam to Chili\'s'],
+    agentMessages: ['Biggest Drawdown award, again', 'Please no again', 'dibs on Best Hedge', 'I\'m taking Pam to Chili\'s'],
     sound: 'celebration',
   },
   {
@@ -316,12 +316,31 @@ export const OFFICE_EVENTS: RandomOfficeEvent[] = [
     sound: 'celebration',
   },
   {
+    id: 'margin-call',
+    name: 'Margin Call',
+    slackAnnouncement: "📞 MARGIN CALL! (it's Michael's personal account. again.)",
+    duration: 4000,
+    type: 'slack-only',
+    managerMessage: 'I DECLARE... more collateral?',
+    agentMessages: ['not again', 'who let him trade options', 'Oscar, explain leverage to him', 'Toby, this is your fault somehow'],
+    sound: 'error',
+  },
+  {
+    id: 'earnings-season',
+    name: 'Earnings Season',
+    slackAnnouncement: '📊 Earnings season — Kelly is live-tweeting the conference calls',
+    duration: 3500,
+    type: 'slack-only',
+    agentMessages: ['OMG they raised guidance!!', 'beat on EPS, miss on revenue', 'Stanley is asleep', 'Kevin thought EPS was a snack'],
+    sound: 'notification',
+  },
+  {
     id: 'bears-beets',
     name: 'Bears. Beets. Battlestar Galactica.',
-    slackAnnouncement: '📋 Question: what kind of bear is best?',
+    slackAnnouncement: '📋 Question: what kind of market is best?',
     duration: 3000,
     type: 'slack-only',
-    agentMessages: ['false. black bear.', 'Bears, beets, Battlestar Galactica', 'identity theft is not a joke, Jim', 'fact: bears eat beets'],
+    agentMessages: ['false. bear market.', 'Bears, beets, bear markets', 'identity theft is not a joke, Jim', 'fact: bears eat beets AND portfolios'],
     sound: 'notification',
   },
 ]

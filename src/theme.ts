@@ -1,6 +1,14 @@
-/** theme.ts — Office TV theme pack (characters, rooms, chatter, names, events) */
+/**
+ * theme.ts — Dunder Mifflin Capital theme pack (characters, rooms, chatter, names, props).
+ *
+ * The Scranton branch is now a boutique trading firm. Every firm role in
+ * firm/roster.json has a fixed cast member (Dwight runs Risk, Oscar runs
+ * Research, Kevin does P&L…). Generic Claude Code agents (debugger, reviewer…)
+ * are dealt the remaining characters at random.
+ */
 
 import { useSyncExternalStore } from 'react'
+import { FIRM_CASTING, PIPELINE_SLUGS } from './firm'
 
 export type ThemeName = 'default' | 'office'
 
@@ -22,8 +30,10 @@ const OFFICE_CATS = [
   'cat-phillip', 'cat-princess-lady', 'cat-princess-lady-alt', 'cat-sprinkles',
 ]
 
-// Fixed casting by role — same character used for Slack avatar AND room sprite
+// Fixed casting by role — same character used for Slack avatar AND room sprite.
+// boss → Michael (Managing Partner), assistant → Jim (Execution), plus every desk role.
 const FIXED_ROLE_CASTING: Record<string, string> = {
+  ...FIRM_CASTING,
   boss: 'michael-scott',
   assistant: 'jim-halpert',
 }
@@ -41,13 +51,15 @@ let state: ThemeState = loadInitial()
 const listeners = new Set<() => void>()
 
 function loadInitial(): ThemeState {
+  // Why: this fork IS the trading firm — the Dunder Mifflin Capital floor is the default.
+  // Users who toggled it off (/the-office) keep 'default'.
   try {
     const saved = localStorage.getItem('agent-office-theme')
-    if (saved === 'office') {
-      return { name: 'office', castByRole: {}, angelaRole: null, angelaCat: null }
+    if (saved === 'default') {
+      return { name: 'default', castByRole: {}, angelaRole: null, angelaCat: null }
     }
   } catch {}
-  return { name: 'default', castByRole: {}, angelaRole: null, angelaCat: null }
+  return { name: 'office', castByRole: {}, angelaRole: null, angelaCat: null }
 }
 
 function persist() {
@@ -99,26 +111,31 @@ export function getCharacterBaseForRole(role: string, defaultBase: string): stri
   if (state.name !== 'office') return defaultBase
   if (state.castByRole[role]) return state.castByRole[role]
 
-  // Fixed casting wins
+  // Fixed casting wins. If a random dev agent was holding this character, re-deal them.
   const fixed = FIXED_ROLE_CASTING[role]
   if (fixed) {
+    const holder = Object.keys(state.castByRole).find(r => state.castByRole[r] === fixed && !FIXED_ROLE_CASTING[r])
     state.castByRole[role] = fixed
+    if (holder) {
+      delete state.castByRole[holder]
+      getCharacterBaseForRole(holder, defaultBase)
+      // Why: this can run during render (sprite lookup) — notify subscribers after the render pass
+      queueMicrotask(emit)
+    }
+    if (fixed === 'angela-martin') { state.angelaRole = role; state.angelaCat = pick(OFFICE_CATS) }
     return fixed
   }
 
-  // Pick from remaining — exclude already-dealt + reserved-fixed-not-yet-used
+  // Random roles: prefer characters who aren't on the trading desk pipeline and aren't on screen.
   const used = dealt()
-  const reservedNotYetUsed = new Set(
-    Object.values(FIXED_ROLE_CASTING).filter(c => !used.has(c))
-  )
-  const pool = OFFICE_CHARACTERS.filter(c => !used.has(c) && !reservedNotYetUsed.has(c))
-  // Fallback when all 22 are dealt: reuse an existing non-fixed cast slug.
-  // Why: prevents duplicating boss (Michael) or assistant (Jim) on screen when chat roles overflow.
-  const fixedSet = new Set(Object.values(FIXED_ROLE_CASTING))
-  const nonFixedUsed = [...used].filter(c => !fixedSet.has(c))
-  const chosen = pool.length > 0
-    ? pick(pool as string[])
-    : (nonFixedUsed.length > 0 ? pick(nonFixedUsed) : OFFICE_CHARACTERS[2]) // Why: [2] is not Michael/Jim
+  const free = OFFICE_CHARACTERS.filter(c => !used.has(c) && c !== 'michael-scott' && c !== 'jim-halpert')
+  const offDesk = free.filter(c => !PIPELINE_SLUGS.has(c))
+  const nonFixedUsed = [...used].filter(c => c !== 'michael-scott' && c !== 'jim-halpert')
+  const chosen = offDesk.length > 0
+    ? pick(offDesk as string[])
+    : free.length > 0
+      ? pick(free as string[])
+      : (nonFixedUsed.length > 0 ? pick(nonFixedUsed) : OFFICE_CHARACTERS[2]) // Why: [2] is not Michael/Jim
   state.castByRole[role] = chosen
 
   if (chosen === 'angela-martin') {
@@ -171,41 +188,42 @@ export function themedDisplayName(role: string, fallback: string): string {
 // ===== THEMED CHATTER POOLS =====
 
 const OFFICE_SPAWN = [
-  'Identity theft is not a joke, Jim!',
-  'reporting to Scranton branch',
-  'paper, paper, paper',
-  'Bears. Beets. Battlestar Galactica.',
-  'D to the U to the N to the...',
-  'I am Beyoncé, always.',
-  'clocked in, Dunder Mifflin style',
+  'Dunder Mifflin Capital, reporting to the floor',
+  'Bears. Beets. Bear markets.',
+  'market open. let\'s make some paper. the money kind.',
+  'Identity theft is not a joke, Jim! Neither is insider trading.',
+  'clocked in — pre-market prep',
+  'I am Beyoncé, always. Long Beyoncé.',
+  'opening the terminal',
 ]
 const OFFICE_WORK = [
-  'selling paper',
-  'processing reams',
-  'false. black bears.',
-  'Schrute bucks awarded',
-  'negotiating with corporate',
-  'filing TPS reports',
-  'Finer Things Club newsletter',
+  'pricing the book',
+  'running the risk numbers',
+  'FACT: volatility is up',
+  'Schrute bucks marked to market',
+  'negotiating with the Investment Committee',
+  'filing trade confirms',
+  'Finer Things Club equity research',
+  'reconciling positions with Kevin (pray for me)',
 ]
 const OFFICE_DONE = [
   "that's what she said",
-  'boom. roasted.',
-  'PR shipped like 24lb bond',
-  "World's Best Boss approves",
-  'closed the deal',
-  'merged — Jim-approved',
+  'boom. rebalanced.',
+  'trade settled T+1',
+  "World's Best Managing Partner approves",
+  'closed the position',
+  'filled at the limit — Jim-approved',
 ]
 const OFFICE_COFFEE = [
-  'grande latte from Jim',
-  "Kevin's famous chili break",
+  'grande latte from Jim before the open',
+  "Kevin's famous chili, post-close",
   'pretzel day!',
-  'brb, break room',
+  'brb, break room — markets are boring',
 ]
 const OFFICE_WATER = [
   'hydration — Angela says water only',
-  "Stanley says it's almost 5",
-  'filling up, then pretzel',
+  "Stanley says it's almost 5 (the close is at 4)",
+  'filling up, then checking the tape',
   'break room run',
 ]
 
@@ -237,40 +255,40 @@ export function themedWater(): string  { return pick(state.name === 'office' ? O
 // Parallel tool-output messages keyed by role — used when ?sim or ?video loads with Office theme.
 export const OFFICE_SIM_TOOL_MESSAGES: Record<string, string[]> = {
   'security-auditor': [
-    '⚡ auditing middleware for season-nine vulnerabilities',
-    '⚠️ Dwight stored session tokens in his beet cellar',
-    '🚨 JWT refresh token has expiry of "never" — classic',
-    'moving everything to httpOnly before Toby finds out',
+    '⚡ auditing trade-system access — Dwight has root again',
+    '⚠️ someone stored the broker API key in a sticky note on the beet cellar door',
+    '🚨 order router allows unlimited size — classic Ryan',
+    'locking it down before Toby finds out',
   ],
   'code-reviewer': [
     '⚡ running: grep -r "that\'s what she said" src/',
-    '🔍 reviewing — this PR has more drama than the Dundies',
-    '💡 suggesting httpOnly cookies — not localStorage, this isn\'t Schrute Farms',
-    'lgtm, ship it to Stamford branch',
+    '🔍 reviewing — this risk model has more drama than the Dundies',
+    '💡 position limits belong in config, not in Michael\'s head',
+    'lgtm, ship it to the Stamford desk',
   ],
   'frontend-developer': [
-    '⚡ editing src/auth/tokenStore.ts',
-    '🎨 new login screen looks better than Phyllis\'s wedding',
-    'I can handle the cookie migration, no big deal',
+    '⚡ editing src/desk/TickerTape.tsx',
+    '🎨 new client report looks better than Phyllis\'s wedding',
+    'P&L chart is green. mostly. let\'s not zoom out.',
     'responsive on mobile — even Stanley approves',
   ],
   'assistant': [
-    'the printer jammed again. third time today. Sabre strikes.',
-    'someone check on Michael, he\'s monologuing',
-    "I'll handle it — identity theft is not a joke",
+    'the trade printer jammed again. Sabre strikes.',
+    'someone check on Michael, he\'s shorting the dollar "for fun"',
+    "I'll handle the execution — identity theft is not a joke",
   ],
   'boss': [
-    'pizza in the lobby! it\'s pretzel day!',
+    'pizza on the trading floor! it\'s pretzel day!',
     'anyone want a Red Bull? or a Schrute Buck?',
-    'ship it, we\'ll fix it in prod. PARKOUR!',
-    'how are we looking on the dashboard?',
+    'buy high, sell higher. PARKOUR!',
+    'how are we looking on the P&L?',
   ],
 }
 
 /** Sim replacement for Antony's typed questions, when theme is Office */
 export const OFFICE_SIM_BOSS_PROMPTS = [
-  '/ultra-think audit our authentication like Dwight auditing the beet farm',
-  'how bad is the localStorage issue — worse than Kevin dropping the chili?',
+  '/ultra-think audit our trading-system access like Dwight auditing the beet farm',
+  'how bad is the order-router issue — worse than Kevin dropping the chili?',
 ]
 
 // ===== Rotation helpers for the Office ?sim rotation =====
@@ -326,34 +344,40 @@ export function displayNameFromSlug(slug: string): string {
 // Why: visual easter eggs tying props to iconic bits. Each slug maps to a pool
 // of signature props — when there's more than one, a deterministic hash picks
 // per-role so the same agent keeps the same prop within a session.
+const PROP = (f: string) => `/sprites/office/props/${f}.png`
 const OFFICE_PROPS_BY_SLUG: Record<string, string[]> = {
-  'michael-scott':   [
-    '/sprites/office/props/worlds-best-boss-mug.png',
-    '/sprites/office/props/dundie-award.png',
-    '/sprites/office/props/golden-ticket-box.png',
-    '/sprites/office/props/prison-mike.png',
-    '/sprites/office/props/no-god-please-no.png',
-  ],
-  'dwight-schrute':  [
-    '/sprites/office/props/cpr-dummy-mask.png',
-    '/sprites/office/props/schrute-buck.png',
-  ],
-  'jim-halpert':     ['/sprites/office/props/jello-stapler.png'],
-  'stanley-hudson':  ['/sprites/office/props/pretzel-day.png'],
-  'jan-levinson':    ['/sprites/office/props/serenity-by-jan-candle.png'],
-  // Why: Finer Things Club members share the prop — Oscar, Pam, and Toby.
-  'oscar-martinez':  ['/sprites/office/props/finer-things-club.png'],
-  'pam-beesly':      ['/sprites/office/props/finer-things-club.png'],
-  'toby-flenderson': ['/sprites/office/props/finer-things-club.png'],
+  // Managing Partner — the classics, plus his bull market
+  'michael-scott':   [PROP('worlds-best-boss-mug'), PROP('dundie-award'), PROP('golden-ticket-box'), PROP('prison-mike'), PROP('no-god-please-no'), PROP('bull-market')],
+  // Risk: Bears. Beets. Bear markets.
+  'dwight-schrute':  [PROP('bear-market'), PROP('schrute-buck'), PROP('cpr-dummy-mask')],
+  // Execution: trade tickets (and a stapler in jello)
+  'jim-halpert':     [PROP('trade-ticket'), PROP('jello-stapler')],
+  // Income: pretzels and coupons
+  'stanley-hudson':  [PROP('bond-certificate'), PROP('pretzel-day')],
+  'jan-levinson':    [PROP('serenity-by-jan-candle')],
+  // Research / reporting / compliance — Finer Things Club members keep their prop
+  'oscar-martinez':  [PROP('candlestick-chart'), PROP('finer-things-club')],
+  'pam-beesly':      [PROP('client-report'), PROP('finer-things-club')],
+  'toby-flenderson': [PROP('compliance-stamp'), PROP('finer-things-club')],
+  'holly-flax':      [PROP('compliance-stamp')],
+  'kevin-malone':    [PROP('calculator-keleven')],
+  'ryan-howard':     [PROP('wuphf-coin')],
+  'meredith-palmer': [PROP('gold-bar')],
+  'karen-filippelli':[PROP('candlestick-chart')],
+  'gabe-lewis':      [PROP('ticker-terminal')],
+  'darryl-philbin':  [PROP('ticker-terminal')],
+  'creed-bratton':   [PROP('dunder-mifflin-paper-box')], // "I still sell paper on the side."
+  'david-wallace':   [PROP('dunder-mifflin-capital-logo')],
+  'robert-california': [PROP('bull-market')],
   // Angela: randomized second cat assigned per-role below — not a prop file.
 }
 
 // Why: generic fallback for remaining cast so every Office character has a prop.
 const OFFICE_GENERIC_PROPS = [
-  '/sprites/office/props/dunder-mifflin-logo.png',
-  '/sprites/office/props/dunder-mifflin-paper-box.png',
-  '/sprites/office/props/schrute-buck.png',
-  '/sprites/office/props/golden-ticket-box.png',
+  PROP('dunder-mifflin-capital-logo'),
+  PROP('ticker-terminal'),
+  PROP('schrute-buck'),
+  PROP('golden-ticket-box'),
 ]
 
 const OFFICE_CATS_PATHS = OFFICE_CATS.map(c => `/sprites/office/cats/${c}.png`)
@@ -383,6 +407,6 @@ export function getOfficePropForRole(role: string): string | null {
     return specificPool[hashString(role + slug) % specificPool.length]
   }
 
-  // Generic fallback: dunder logo / Schrute buck / golden ticket, deterministic per slug
+  // Generic fallback: firm logo / terminal / Schrute buck / golden ticket, deterministic per slug
   return OFFICE_GENERIC_PROPS[hashString(slug) % OFFICE_GENERIC_PROPS.length]
 }

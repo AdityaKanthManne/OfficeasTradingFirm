@@ -38,16 +38,19 @@ export interface Agent {
 }
 
 export interface OfficeEvent {
-  type: 'agent_spawned' | 'agent_working' | 'agent_completed' | 'mcp_call' | 'mcp_done' | 'new_hire' | 'chat_message' | 'chat_typing' | 'chat_reaction' | 'chat_seen'
+  type: 'agent_spawned' | 'agent_working' | 'agent_completed' | 'mcp_call' | 'mcp_done' | 'new_hire' | 'chat_message' | 'chat_typing' | 'chat_reaction' | 'chat_seen' | 'desk_update'
   agent?: Partial<Agent>
   agentId?: string
   status?: string
   result?: string
   sender?: string
   text?: string
+  /** true for events emitted by the trading desk (keeps the chat quieter) */
+  desk?: boolean
 }
 
 import { BOSS_NAME, BOSS_COLOR, BOSS_EMOJI } from './config'
+import { FIRM_AGENT_CONFIGS } from './firm'
 
 export const AGENT_CONFIGS: Record<string, { color: string; emoji: string; title: string }> = {
   // The boss — configured via office.config.json
@@ -79,4 +82,6 @@ export const AGENT_CONFIGS: Record<string, { color: string; emoji: string; title
   'ios-simulator':         { color: '#a2aaad', emoji: '📱', title: 'iOS' },
   'assistant':             { color: '#cc785c', emoji: '🤖', title: 'Claude' },
   'default':               { color: '#95a5a6', emoji: '👤', title: 'Worker' },
+  // Dunder Mifflin Capital desk roles (from firm/roster.json)
+  ...FIRM_AGENT_CONFIGS,
 }

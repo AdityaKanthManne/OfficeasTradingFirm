@@ -33,7 +33,8 @@ fi
 # Extract common fields and build event JSON in a single Python invocation.
 # All variable data is passed via stdin; no shell variables are interpolated
 # into Python source code.
-EVENT_JSON=$(HOOK_PAYLOAD="$PAYLOAD" python3 - <<'PYEOF'
+TRACKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EVENT_JSON=$(HOOK_PAYLOAD="$PAYLOAD" TRACKER_DIR="$TRACKER_DIR" python3 - <<'PYEOF'
 import json, sys, os, re
 
 try:
@@ -108,6 +109,21 @@ if tool_name in ('Agent', 'Task'):
             'general_purpose':      'general-purpose',
             'Explore':              'Explore',
         }
+        # Dunder Mifflin Capital desk roles (firm/roster.json) — e.g. risk-manager → Dwight
+        firm_names = {}
+        try:
+            roster_path = os.path.join(os.environ.get('TRACKER_DIR', ''), '..', 'firm', 'roster.json')
+            with open(roster_path) as fh:
+                for emp in json.load(fh).get('employees', []):
+                    if emp['role'] == 'boss':
+                        continue
+                    key = 'execution-trader' if emp['role'] == 'assistant' else emp['role']
+                    role_map[key] = emp['role']
+                    role_map[key.replace('-', '_')] = emp['role']
+                    firm_names[emp['role']] = emp.get('short', emp['name'])
+        except Exception:
+            pass
+
         role = role_map.get(subagent_type, 'general-purpose')
 
         # Derive a display name from the role
@@ -128,7 +144,7 @@ if tool_name in ('Agent', 'Task'):
             'general-purpose':      'Agent',
             'Explore':              'Explorer',
         }
-        name = name_map.get(role, 'Agent')
+        name = name_map.get(role) or firm_names.get(role, 'Agent')
 
         # Truncate task description for display
         task = description[:80] if description else 'Working on task'

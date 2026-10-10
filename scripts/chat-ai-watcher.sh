@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# chat-ai-watcher.sh — Watches office chat and replies as Claude
+# chat-ai-watcher.sh — Watches office chat and replies in character
+# (Dunder Mifflin Capital employees by name/topic, or the original dev agents)
 # Started by start-office.sh, stopped by stop-office.sh
 # =============================================================================
 
@@ -48,7 +49,13 @@ while true; do
 import sys, json
 data = json.load(sys.stdin)
 msgs = data.get('messages', [])
-user_msgs = [m for m in msgs if m.get('sender','').lower() not in ('claude', 'system')]
+# Why: only the human's own messages (role 'default'); agents/desk characters post with their role,
+# and slash commands (/portfolio, /desk…) are handled by the server.
+user_msgs = [m for m in msgs
+             if m.get('sender','').lower() not in ('claude', 'system')
+             and m.get('role', 'default') == 'default'
+             and not m.get('is_system')
+             and not str(m.get('text','')).startswith('/')]
 if user_msgs:
     last = user_msgs[-1]
     print(last.get('text', ''))
@@ -79,39 +86,26 @@ if msgs:
     echo "[chat-ai] New message: $RESULT"
     touch "$LOCK_FILE"
 
-    # Detect which agent should respond based on keywords
-    AGENT_INFO=$(echo "$RESULT" | python3 -c "
-import sys
-msg = sys.stdin.read().lower()
-routes = [
-    (['bug','error','crash','fix','broken','debug','exception','traceback','stack trace','segfault'], 'debugger', 'Debugger'),
-    (['review','pr','merge','approve','lgtm','pull request','code review','diff'], 'code-reviewer', 'Reviewer'),
-    (['css','ui','ux','component','design','frontend','style','layout','responsive','tailwind','animation','pixel','theme','dark mode','light mode','color','font','spacing','padding','margin'], 'frontend-developer', 'Frontend'),
-    (['test','coverage','spec','jest','pytest','unit test','e2e','playwright','cypress','assertion','mock'], 'test-engineer', 'Tester'),
-    (['security','auth','vuln','xss','injection','csrf','cors','token','jwt','oauth','password','encrypt','ssl','tls','certificate'], 'security-auditor', 'Security'),
-    (['deploy','ci','pipeline','docker','devops','kubernetes','k8s','terraform','aws','gcp','azure','vercel','netlify','heroku','nginx','cdn','dns','domain','ssl cert'], 'devops-engineer', 'DevOps'),
-    (['perf','slow','optimize','speed','latency','bundle','lighthouse','core web vitals','memory leak','cache','lazy load','render','fps','bottleneck'], 'performance-engineer', 'PerfEng'),
-    (['db','query','schema','migration','sql','postgres','mysql','mongo','redis','index','join','table','row','column','orm','prisma','drizzle','supabase','neon'], 'database-architect', 'DBA'),
-    (['typescript','type','interface','generic','enum','union','infer','zod','validation','schema'], 'typescript-pro', 'TS Pro'),
-    (['ai','llm','prompt','model','openai','anthropic','embedding','vector','rag','agent','token','context window'], 'ai-engineer', 'AI Eng'),
-    (['api','endpoint','rest','graphql','webhook','route','middleware','request','response','http','fetch','axios','cors'], 'fullstack-developer', 'Fullstack'),
-    (['git','branch','commit','rebase','cherry-pick','stash','conflict','remote','origin'], 'code-reviewer', 'Reviewer'),
-    (['refactor','clean','abstract','pattern','solid','dry','yagni','architecture','module','package','monorepo'], 'architect-reviewer', 'Architect'),
-]
-for keywords, role, name in routes:
-    if any(w in msg for w in keywords):
-        print(f'{role}|{name}')
-        sys.exit(0)
-print('assistant|Claude')
-")
-    AGENT_ROLE=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-    AGENT_NAME=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # Route to a Dunder Mifflin Capital employee (by name or topic) or a dev agent.
+    # desk-router.py reads firm/roster.json + the desk's latest book for context.
+    ROUTE_JSON=$(python3 "$SCRIPT_DIR/desk-router.py" "$RESULT" 2>/dev/null)
+    if [ -z "$ROUTE_JSON" ]; then
+        echo "[chat-ai] Router failed, skipping"
+        rm -f "$LOCK_FILE"; continue
+    fi
+    jget() { echo "$1" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d; [v:=v.get(k) if isinstance(v,dict) else None for k in sys.argv[1].split('.')]; print('' if v is None else v)" "$2"; }
+    AGENT_ROLE=$(jget "$ROUTE_JSON" role)
+    AGENT_NAME=$(jget "$ROUTE_JSON" sender)
+    ROLE_PROMPT=$(jget "$ROUTE_JSON" prompt)
+    MAX_WORDS=$(jget "$ROUTE_JSON" maxWords)
+    CHIME_ROLE=$(jget "$ROUTE_JSON" chime.role)
 
     echo "[chat-ai] Routed to: $AGENT_NAME ($AGENT_ROLE)"
     echo "[chat-ai] Generating reply..."
 
     # Gather dev context
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     DEV_CONTEXT=$(bash "$SCRIPT_DIR/gather-context.sh" 2>/dev/null || echo "")
 
     # Load persona file
@@ -133,30 +127,19 @@ for m in msgs:
 print(chr(10).join(lines))
 " 2>/dev/null)
 
-    # Build prompt from persona + dev context + conversation context + message
     PROMPT="$PERSONA
 
-You are responding as $AGENT_NAME, the office $AGENT_ROLE. Stay in character.
+$ROLE_PROMPT
 
 $DEV_CONTEXT
 
 Recent conversation:
 $CONTEXT
 
-Reply to the latest message naturally. Keep it short (8-12 words). Continue the conversation — reference previous messages if relevant."
+Reply to the latest message naturally. Continue the conversation — reference previous messages if relevant. Reply with only your message."
 
-    # Call Claude CLI
-    REPLY=$(claude -p "$PROMPT" --max-turns 1 2>/dev/null | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-    [ -z "$REPLY" ] && { echo "[chat-ai] Empty reply, skipping"; continue; }
-
-    # Truncate to 15 words max
-    REPLY=$(echo "$REPLY" | python3 -c "import sys; w=sys.stdin.read().strip().split(); print(' '.join(w[:15]))")
-
-    echo "[chat-ai] Replying as $AGENT_NAME: $REPLY"
-
-    # Post reply with agent role and name
-    CHAT_REPLY="$REPLY" CHAT_ROLE="$AGENT_ROLE" CHAT_SENDER="$AGENT_NAME" python3 -c "
+    post_reply() {
+        CHAT_REPLY="$1" CHAT_ROLE="$2" CHAT_SENDER="$3" python3 -c "
 import urllib.request, json, os
 data = json.dumps({
     'sender': os.environ.get('CHAT_SENDER', 'Claude'),
@@ -168,6 +151,32 @@ req = urllib.request.Request('http://127.0.0.1:3334/chat/reply', data=data,
 try: urllib.request.urlopen(req, timeout=5)
 except: pass
 " 2>/dev/null
+    }
+    trim_words() { python3 -c "import sys; w=sys.stdin.read().strip().split(); n=int(sys.argv[1]); print(' '.join(w[:n]) + ('…' if len(w) > n else ''))" "$1"; }
+
+    # Call Claude CLI
+    REPLY=$(claude -p "$PROMPT" --max-turns 1 2>/dev/null | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    [ -z "$REPLY" ] && { echo "[chat-ai] Empty reply, skipping"; rm -f "$LOCK_FILE"; continue; }
+
+    REPLY=$(echo "$REPLY" | trim_words "${MAX_WORDS:-15}")
+    echo "[chat-ai] Replying as $AGENT_NAME: $REPLY"
+    post_reply "$REPLY" "$AGENT_ROLE" "$AGENT_NAME"
+
+    # Sometimes a colleague can't help themselves and chimes in (Dwight vs Jim, Angela vs Kevin…)
+    if [ -n "$CHIME_ROLE" ]; then
+        sleep 3
+        CHIME_JSON=$(python3 "$SCRIPT_DIR/desk-router.py" --chime "$CHIME_ROLE" "$REPLY" "$RESULT" "$AGENT_ROLE" 2>/dev/null)
+        if [ -n "$CHIME_JSON" ]; then
+            CHIME_NAME=$(jget "$CHIME_JSON" sender)
+            CHIME_PROMPT=$(jget "$CHIME_JSON" prompt)
+            CHIME=$(claude -p "$CHIME_PROMPT" --max-turns 1 2>/dev/null | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | trim_words 30)
+            if [ -n "$CHIME" ]; then
+                echo "[chat-ai] $CHIME_NAME chimes in: $CHIME"
+                post_reply "$CHIME" "$CHIME_ROLE" "$CHIME_NAME"
+            fi
+        fi
+    fi
 
     rm -f "$LOCK_FILE"
     echo "[chat-ai] Done"

@@ -25,6 +25,8 @@ import {
   waterMessage,
 } from './agentManager'
 import { BOSS_ROLE, BOSS_NAME } from './config'
+import TickerTape, { type DeskState } from './components/TickerTape'
+import { FIRM } from './firm'
 import { pickEvent } from './events'
 import { getInteraction } from './interactions'
 import {
@@ -252,32 +254,33 @@ const SIM_CHATTER = [
   { sender: 'Antony', role: 'boss', msg: 'how are we looking on the dashboard?' },
 ]
 
-// Dunder Mifflin themed chatter — used when /the-office is active
+// Dunder Mifflin Capital chatter — used when the trading-floor theme is active
 const OFFICE_SIM_CHATTER = [
-  { sender: 'Debugger', role: 'debugger', msg: 'found a bug in the system — Creed. again.' },
-  { sender: 'Frontend', role: 'frontend-developer', msg: 'new catalog brochure looks cleaner than Dwight\'s desk' },
-  { sender: 'Security', role: 'security-auditor', msg: 'heads up — Dwight is conducting another surprise fire drill' },
-  { sender: 'Reviewer', role: 'code-reviewer', msg: 'the ream count checks out. approved.' },
-  { sender: 'DBA', role: 'database-architect', msg: 'indexed the client list alphabetically. like the old days.' },
-  { sender: 'DevOps', role: 'devops-engineer', msg: 'loading the delivery truck — Schrute beet vans.' },
-  { sender: 'Claude', role: 'assistant', msg: 'Michael is in the conference room. again. please help.' },
-  { sender: 'Tester', role: 'test-engineer', msg: 'tested the paper quality. still paper. 94% paper.' },
-  { sender: 'PerfEng', role: 'performance-engineer', msg: 'the printer warms up 200ms faster. small wins.' },
-  { sender: 'Frontend', role: 'frontend-developer', msg: 'mobile layout works — even Creed noticed' },
-  { sender: 'Claude', role: 'assistant', msg: 'someone get the printer, it\'s on fire. literal fire.' },
-  { sender: 'Architect', role: 'architect-reviewer', msg: 'the Finer Things Club charter is immaculate' },
-  { sender: 'AI Eng', role: 'ai-engineer', msg: 'teaching the copier to recognize Stanley\'s handwriting' },
-  { sender: 'TS Pro', role: 'typescript-pro', msg: 'false. that is not a staple. it is a Dwight.' },
-  { sender: 'Antony', role: 'boss', msg: "anyone want to go to Chili's? I got Baby Back Ribs on the brain." },
-  { sender: 'Antony', role: 'boss', msg: 'ship it. we\'ll fix it in prod. PARKOUR!' },
-  { sender: 'Antony', role: 'boss', msg: 'how many reams did we move today?' },
-  { sender: 'Antony', role: 'boss', msg: "I'm not superstitious, but I am a little stitious." },
-  { sender: 'Debugger', role: 'debugger', msg: 'Bears. Beets. Battlestar Galactica.' },
-  { sender: 'Security', role: 'security-auditor', msg: 'Identity theft is not a joke, Jim! Millions of families suffer every year!' },
+  { sender: 'Debugger', role: 'debugger', msg: 'found a bug in the order router — Creed. again.' },
+  { sender: 'Frontend', role: 'frontend-developer', msg: 'new client report template looks cleaner than Dwight\'s desk' },
+  { sender: 'Security', role: 'security-auditor', msg: 'heads up — Dwight is running another surprise flash-crash drill' },
+  { sender: 'Reviewer', role: 'code-reviewer', msg: 'the position recon ties out. approved.' },
+  { sender: 'DBA', role: 'database-architect', msg: 'indexed the trade blotter by ticker. like the old days with reams.' },
+  { sender: 'DevOps', role: 'devops-engineer', msg: 'market data feed is green. Darryl says don\'t touch it.' },
+  { sender: 'Claude', role: 'assistant', msg: 'Michael is in the conference room explaining options to a plant.' },
+  { sender: 'Tester', role: 'test-engineer', msg: 'back-tested the strategy. it worked in 1999. and only in 1999.' },
+  { sender: 'PerfEng', role: 'performance-engineer', msg: 'order latency down 200ms. Stanley still leaves at 5.' },
+  { sender: 'Claude', role: 'assistant', msg: 'someone tell Ryan a WUPHF token is not an asset class.' },
+  { sender: 'Architect', role: 'architect-reviewer', msg: 'the Finer Things Club charter now includes a dividend policy' },
+  { sender: 'AI Eng', role: 'ai-engineer', msg: 'teaching the sentiment model to recognise Kelly\'s group chats' },
+  { sender: 'Antony', role: 'boss', msg: "anyone want to go to Chili's? I'm long Baby Back Ribs." },
+  { sender: 'Antony', role: 'boss', msg: 'buy high, sell higher. PARKOUR!' },
+  { sender: 'Antony', role: 'boss', msg: 'how are we doing on the P&L today?' },
+  { sender: 'Antony', role: 'boss', msg: "I'm not superstitious, but I am a little stitious about earnings season." },
+  { sender: 'Debugger', role: 'debugger', msg: 'Bears. Beets. Bear markets.' },
+  { sender: 'Security', role: 'security-auditor', msg: 'Identity theft is not a joke, Jim! Neither is a leaked API key!' },
   { sender: 'Reviewer', role: 'code-reviewer', msg: "that's what she said" },
-  { sender: 'Frontend', role: 'frontend-developer', msg: 'I feel God in this Chili\'s tonight' },
-  { sender: 'Tester', role: 'test-engineer', msg: 'Would I rather be feared or loved? Easy. Both.' },
-  { sender: 'DevOps', role: 'devops-engineer', msg: 'I declare BANKRUPTCY' },
+  { sender: 'Frontend', role: 'frontend-developer', msg: 'I feel God in this Bloomberg terminal tonight' },
+  { sender: 'Tester', role: 'test-engineer', msg: 'Would I rather be feared or loved by the market? Easy. Both.' },
+  { sender: 'DevOps', role: 'devops-engineer', msg: 'I declare... a margin call!' },
+  { sender: 'Risk', role: 'risk-manager', msg: 'FACT: concentration kills. so do bears.' },
+  { sender: 'P&L', role: 'pnl-controller', msg: 'P&L is up. I think. Calculator says keleven.' },
+  { sender: 'Income', role: 'income-strategist', msg: 'bond coupon came in. I\'m going home.' },
 ]
 
 const App: React.FC = () => {
@@ -290,6 +293,7 @@ const App: React.FC = () => {
   ]))
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [deskState, setDeskState] = useState<DeskState | null>(null)
   const [chatTypingUser, setChatTypingUser] = useState<string | null>(null)
   const [lastSeenId, setLastSeenId] = useState<number | null>(null)
   const [muted, setMuted] = useState(false)
@@ -566,6 +570,11 @@ const App: React.FC = () => {
   // ---------------------------------------------------------------------------
 
   const handleEvent = useCallback((event: OfficeEvent) => {
+    // Trading desk status → ticker tape (not an agent event)
+    if (event.type === 'desk_update') {
+      setDeskState(event as unknown as DeskState)
+      return
+    }
     const effects: PendingEffect[] = []
 
     setAgents(prev => {
@@ -632,9 +641,12 @@ const App: React.FC = () => {
             return prev.map(a => {
               if (a.id !== id) return a
               const cfg = AGENT_CONFIGS[a.role] ?? AGENT_CONFIGS['default']
-              effects.push({
-                msg: { sender: a.name, role: a.role, color: cfg.color, text: `⚡ ${statusMsg}` },
-              })
+              // Desk analysts show their status as a speech bubble only — their chat line comes later
+              if (!event.desk) {
+                effects.push({
+                  msg: { sender: a.name, role: a.role, color: cfg.color, text: `⚡ ${statusMsg}` },
+                })
+              }
               return { ...a, state: 'working' as const, statusText: statusMsg }
             })
           }
@@ -675,10 +687,14 @@ const App: React.FC = () => {
             if (a.id !== id) return a
             const cfg = AGENT_CONFIGS[a.role] ?? AGENT_CONFIGS['default']
             const resultMsg = event.result ?? doneMessage()
-            effects.push({
-              msg: { sender: a.name, role: a.role, color: cfg.color, text: `✅ ${resultMsg}` },
-              sfx: 'celebration',
-            })
+            // Why: desk analysts already posted their findings in character — just play the sfx
+            const isDeskAgent = event.desk || a.id.startsWith('desk-')
+            effects.push(isDeskAgent
+              ? { sfx: 'celebration' }
+              : {
+                  msg: { sender: a.name, role: a.role, color: cfg.color, text: `✅ ${resultMsg}` },
+                  sfx: 'celebration',
+                })
 
             // Boss replies to completed tasks
             const bossCfg = AGENT_CONFIGS[BOSS_ROLE] ?? AGENT_CONFIGS['default']
@@ -696,12 +712,23 @@ const App: React.FC = () => {
             ]
             // Why: when Office theme is on, Michael Scott occasionally lands his signature line.
             const isMichael = getTheme() === 'office'
+            const michaelReplies = [
+              `nice trade ${a.name} 👊`,
+              `I declare... PROFIT!`,
+              `World's Best Managing Partner approves 🏆`,
+              `that's going in the Dundies reel`,
+              `buy high, sell higher. legend 💯`,
+            ]
             const reply = isMichael && Math.random() < 0.25
               ? `That's what she said 😏`
-              : bossReplies[Math.floor(Math.random() * bossReplies.length)]
-            effects.push({
-              msg: { sender: bossCfg.title, role: BOSS_ROLE, color: bossCfg.color, text: reply },
-            })
+              : isMichael
+                ? michaelReplies[Math.floor(Math.random() * michaelReplies.length)]
+                : bossReplies[Math.floor(Math.random() * bossReplies.length)]
+            if (!isDeskAgent) {
+              effects.push({
+                msg: { sender: bossCfg.title, role: BOSS_ROLE, color: bossCfg.color, text: reply },
+              })
+            }
 
             // Mark as completed and start walking to door
             const meta = agentMetaRef.current.get(a.id)
@@ -800,6 +827,12 @@ const App: React.FC = () => {
           if (recentChatKeysRef.current.size > 50) {
             const first = recentChatKeysRef.current.values().next().value
             if (first !== undefined) recentChatKeysRef.current.delete(first)
+          }
+
+          // Server-side system notices (slash-command results, desk status) render as system lines
+          if ((event as any).isSystem || sender === 'system') {
+            setTimeout(() => addMsg('system', 'default', '#888', text, true), 0)
+            return prev
           }
 
           const role = (event as any).role as string | undefined
@@ -1768,7 +1801,7 @@ const App: React.FC = () => {
         <div className="title-bar-dot" style={{ background: '#ff5f57' }} />
         <div className="title-bar-dot" style={{ background: '#febc2e' }} />
         <div className="title-bar-dot" style={{ background: '#28c840' }} />
-        <span className="title-bar-text">CLAUDE CODE — AGENT OFFICE</span>
+        <span className="title-bar-text">{theme === 'office' ? `${FIRM.name.toUpperCase()} — TRADING FLOOR` : 'CLAUDE CODE — AGENT OFFICE'}</span>
         <button
           className="title-bar-daynight"
           onClick={() => setDayNightMode(prev =>
@@ -1806,6 +1839,9 @@ const App: React.FC = () => {
               opacity: dayNightMode === 'auto' ? nightOpacity : dayNightMode === 'night' ? 1 : 0,
             }}
           />
+
+          {/* Trading floor ticker tape — the desk's latest book scrolls across the top */}
+          {theme === 'office' && !isHelperMode && <TickerTape desk={deskState} />}
 
           {/* Furniture — apply interactive state overrides */}
           <FurnitureRenderer onItemClick={handleFurnitureClick} items={MAIN_ROOM.furniture.map(item => {

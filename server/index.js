@@ -19,6 +19,9 @@ import { fileURLToPath } from 'url'
 import { dirname } from 'path'
 import { addMessage, getMessages, markSeen, addReaction } from './chat-db.js'
 import db from './chat-db.js'
+import { createDesk } from './desk/desk.js'
+import { parsePortfolioText, parsePortfolioJson, PORTFOLIO_HELP } from './desk/parser.js'
+import { ROSTER, FIRM } from './desk/roster.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -102,6 +105,9 @@ function discoverMcpServers() {
 
 /** @type {Map<string, object>} agentId -> agent object */
 const activeAgents = new Map()
+
+// The trading desk — turns /portfolio requests into a full in-character review
+const desk = createDesk({ broadcast: (p) => broadcast(p), addMessage, activeAgents })
 
 /**
  * Generate a stable agent ID from the event payload.
@@ -251,7 +257,25 @@ function handleSlashCommand(cmd) {
       return '🧹 Chat cleared'
     }
     case '/help':
-      return '📋 Commands: /status — office stats, /agents — list agents, /clear — wipe chat history, /help — this message'
+      return '📋 Commands: /portfolio <holdings> — send a book to the trading desk, /desk — desk status, /roster — who does what, /reports — past client reports, /status — office stats, /agents — list agents, /clear — wipe chat history, /the-office — toggle the trading floor theme'
+    case '/desk': {
+      const st = desk.status()
+      if (st.status === 'running') return `📈 Desk is working on ${st.running.client} — stage: ${st.stage}`
+      if (st.latest) return `📈 Desk idle. Last book: ${st.latest.client} ($${Math.round(st.latest.totalValue).toLocaleString()}) — ${st.latest.reportUrl}`
+      return '📈 Desk idle. Send one with /portfolio AAPL 30%, MSFT 20%, TLT 30%, CASH 20%'
+    }
+    case '/roster': {
+      const depts = ROSTER.departments.map(d => {
+        const people = ROSTER.employees.filter(e => e.department === d.id).map(e => `${e.name} (${e.title})`)
+        return people.length ? `${d.name} [was ${d.formerly}]: ${people.join(', ')}` : null
+      }).filter(Boolean)
+      return `🏢 ${FIRM.fullName} — ${depts.join(' • ')}`
+    }
+    case '/reports': {
+      const list = desk.listReports().slice(0, 5)
+      if (!list.length) return '📄 No reports yet. Send a book with /portfolio'
+      return '📄 Recent reports: ' + list.map(id => `http://127.0.0.1:${PORT}/reports/${id}`).join('  ')
+    }
     default:
       return null
   }
@@ -275,6 +299,21 @@ app.post('/chat', (req, res) => {
   if (typeof text === 'string' && text.startsWith('/')) {
     const parts = text.split(' ')
     const cmd = parts[0]
+
+    // /portfolio <holdings> | <mandate> — hand a book to the trading desk
+    if (/^\/(portfolio|book)$/i.test(cmd)) {
+      const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
+      broadcast({ type: 'chat_message', ...userMsg })
+      const args = text.slice(cmd.length).trim()
+      const reply = (t) => { const m = addMessage({ sender: 'system', text: t, isSystem: true }); broadcast({ type: 'chat_message', ...m, isSystem: true }) }
+      if (!args) { reply(PORTFOLIO_HELP); return res.json({ ok: true }) }
+      if (desk.isRunning()) { reply('📈 The desk is busy with another book. Try /desk for status.'); return res.json({ ok: true }) }
+      const parsed = parsePortfolioText(args)
+      if (!parsed.positions.length) { reply(`Couldn't read any positions. ${parsed.warnings.join('; ')}\n${PORTFOLIO_HELP}`); return res.json({ ok: true }) }
+      desk.run(parsed, { requestedBy: sender }).catch(() => {})
+      return res.json({ ok: true, desk: 'started' })
+    }
+
     const cmdResult = handleSlashCommand(cmd)
     if (cmdResult) {
       const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
@@ -401,6 +440,43 @@ app.post('/chat/typing', (req, res) => {
   }
   broadcast({ type: 'chat_typing', sender: clampString(sender) })
   res.json({ ok: true })
+})
+
+// ---------------------------------------------------------------------------
+// Trading desk API
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /portfolio — start a desk review.
+ * Body: { text: "AAPL 30%, MSFT 20% | moderate" }  or
+ *       { name, mandate, notional, positions: [{ ticker, weight|shares|value, price, cost }] }
+ */
+app.post('/portfolio', (req, res) => {
+  const body = req.body ?? {}
+  if (desk.isRunning()) return res.status(409).json({ error: 'Desk is busy', status: desk.status() })
+  const parsed = typeof body.text === 'string' ? parsePortfolioText(body.text) : parsePortfolioJson(body)
+  if (!parsed.positions.length) return res.status(400).json({ error: 'No positions', warnings: parsed.warnings })
+  const m = addMessage({ sender: 'system', text: `📥 Portfolio received via API (${parsed.positions.length} positions)`, isSystem: true })
+  broadcast({ type: 'chat_message', ...m, isSystem: true })
+  desk.run(parsed).catch(() => {})
+  res.json({ ok: true, started: true, positions: parsed.positions.map(p => p.ticker), warnings: parsed.warnings })
+})
+
+app.get('/portfolio/status', (_req, res) => res.json(desk.status()))
+app.get('/roster/firm', (_req, res) => res.json(ROSTER))
+
+app.get('/reports', (_req, res) => {
+  res.json({ reports: desk.listReports().map(id => ({ id, url: `http://127.0.0.1:${PORT}/reports/${id}` })) })
+})
+
+app.get('/reports/:id', (req, res) => {
+  const raw = req.params.id
+  const m = raw.match(/^([\w-]+?)(?:\.(md|json|html))?$/)
+  if (!m) return res.status(404).send('Not found')
+  const file = desk.reportFile(m[1], m[2] || 'html')
+  if (!file) return res.status(404).send('Report not found')
+  const type = m[2] === 'md' ? 'text/markdown; charset=utf-8' : m[2] === 'json' ? 'application/json' : 'text/html; charset=utf-8'
+  res.type(type).send(readFileSync(file, 'utf8'))
 })
 
 // ---------------------------------------------------------------------------

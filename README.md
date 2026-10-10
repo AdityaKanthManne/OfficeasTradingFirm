@@ -1,24 +1,114 @@
-# Claude Office
+# Claude Office — Dunder Mifflin Capital edition
 
 A pixel art virtual office that visualizes your AI agents working in real-time. Watch Claude Code agents spawn, sit at desks, take coffee breaks, and chat in a Slack-inspired office chat panel — all rendered in an isometric pixel art office.
 
-## Update — Dunder Mifflin mode
+## Dunder Mifflin Capital — the trading firm
 
-Type `/the-office` in the Slack chat panel to flip the whole office into a Scranton-branch tribute. The room, the cast, and the chatter all swap over — Michael Scott runs the place, Jim is your assistant, and Dwight guards the beet cellar.
+The Scranton branch stopped selling paper. **Dunder Mifflin Capital Partners** is now a boutique trading firm, and every employee is an AI agent with a real job on the desk. Give them a portfolio and the whole office goes to work on it, in character.
 
-### Pretzel day, every day
-<p>
-  <img src="docs/images/dunder-mifflin-day.png" alt="Dunder Mifflin — Day" width="48%">
-  <img src="docs/images/dunder-mifflin-night.png" alt="Dunder Mifflin — Night" width="48%">
+<p align="center"><img src="docs/images/trading-floor.png" alt="Dunder Mifflin Capital trading floor" width="90%"></p>
+
+### Send the desk a book
+
+Type into the `#trading-floor` chat:
+
+```
+/portfolio AAPL 30%, MSFT 20%, NVDA 15%, TLT 15%, GLD 10%, BTC 5%, CASH 5% | moderate, 5y, $250k, name: Bob Vance
+/portfolio NVDA 120sh @118 cost 45, AAPL 80sh @228 cost 150, SCHD $15k, BND $20k, IBIT $4k | moderate, 7y, name: Phyllis Vance
+```
+
+Positions can be weights (`AAPL 30%`), shares with price and cost (`NVDA 120sh @118 cost 45`), or dollar amounts (`VOO $20k`). After the `|` you can add a risk profile (conservative / moderate / aggressive), a horizon, an account size and a client name. Type `/portfolio` on its own for help.
+
+**What happens next**
+
+1. 📞 **Erin** logs the order, and **Michael** calls everyone into the conference room.
+2. 🧮 **Kevin** runs the numbers: value, weights, P&L vs cost, concentration. The calculator does the math, so the numbers are right.
+3. 🐻 **Dwight** (risk), 📊 **Oscar** (research), 🥨 **Stanley** (income & rates), 💅 **Kelly** (sentiment), 🪙 **Ryan** (crypto & alts) and 🐈 **Angela** (mandate compliance) walk in, sit at desks and work the book in parallel. **Meredith** joins if you hold commodities, and **Carol** joins if you hold REITs. Each one is a separate `claude -p` agent with their own persona and job.
+4. ☕ **Desk huddle**: the characters argue about each other's findings in the chat. Dwight vs Ryan, Oscar correcting Michael, Angela vetoing, Toby getting shut down.
+5. 🎯 **Jim** turns it into a trade list. If his allocation breaks the mandate, Angela rejects it and the desk uses a compliant baseline instead.
+6. 🎨 **Pam** writes the client report. 📎 **Toby** adds the disclosure. **Michael** signs off.
+
+The report opens from the chat link or the 📄 button on the ticker tape (`http://127.0.0.1:3334/reports/<id>`). It covers an executive summary, positions, each department's analysis, the huddle transcript, the trade list, a **before vs after** risk table, and the disclosures. Markdown and JSON copies live in `reports/<id>/`.
+
+<p align="center"><img src="docs/images/client-report.png" alt="Client report" width="70%"></p>
+
+### Talk to the characters
+
+Ordinary chat messages are routed by name or by topic (`scripts/desk-router.py`). Each character answers in voice, using the numbers from the latest book:
+
+- "**Dwight**, what's our biggest risk?" → Dwight
+- "should we buy more bitcoin?" → Ryan
+- "what happens if the Fed cuts rates?" → Stanley
+- "are we ESG compliant?" → Nellie
+
+About a third of the time a rival chimes in (Jim after Dwight, Angela after Kevin, Dwight after Ryan…). Set `DESK_CHIME_CHANCE=0` to turn that off. Dev questions (bugs, PRs, CSS) still go to the original Claude Office agents.
+
+### The org chart — old departments, new jobs
+
+| New department | Formerly | Who |
+|---|---|---|
+| **Managing Partner's Office** | Regional Management | 👔 Michael Scott — Managing Partner |
+| **Sales & Trading Desk** | Sales | 🎯 Jim Halpert — Head of Execution Trading<br>🥨 Stanley Hudson — Fixed Income & Dividend Strategist<br>🎶 Andy Bernard — Client Coverage & Capital Introductions<br>🧶 Phyllis Vance — Private Wealth Advisor |
+| **Risk Management** | Assistant (to the) Regional Manager | 🐻 Dwight Schrute — Chief Risk Officer (Assistant to the Managing Partner) |
+| **Quant & Fundamental Research** | Accounting | 📊 Oscar Martinez — Head of Quant & Fundamental Research<br>🔎 Karen Filippelli — Equity Research Analyst (Stamford Transfer) |
+| **Fund Accounting & Controllers** | Accounting | 🐈 Angela Martin — Fund Controller & Mandate Compliance<br>🧮 Kevin Malone — P&L & Position Reconciliation |
+| **Compliance & Regulatory** | Human Resources | 📎 Toby Flenderson — Chief Compliance Officer<br>🦉 Holly Flax — Conduct, Training & Culture |
+| **Client Reporting & Investor Relations** | Reception | 🎨 Pam Beesly — Head of Client Reporting & Investor Relations<br>📞 Erin Hannon — Trade Desk Coordinator (Order Intake) |
+| **Market Intelligence** | Customer Service | 💅 Kelly Kapoor — Market Sentiment & Social Media Analyst |
+| **Digital Assets & Alternatives** | Temp / Quality Assurance | 🪙 Ryan Howard — Head of Digital Assets & Algorithmic Strategies<br>🕶️ Creed Bratton — Special Situations & Due Diligence |
+| **Commodities & Real Assets** | Supplier Relations / Real Estate | 🛢️ Meredith Palmer — Commodities Trader<br>🏠 Carol Stills — REITs & Real Assets Analyst |
+| **Trade Operations & Settlement** | Warehouse | 🎹 Darryl Philbin — Head of Trade Operations & Settlement<br>📦 Roy Anderson — Settlement Clerk |
+| **Investment Committee (Corporate)** | Corporate | 🕯️ Jan Levinson — Head of Institutional Strategy & Macro<br>🏛️ David Wallace — Chairman & CEO<br>🦎 Robert California — Chief Investment Officer<br>🖥️ Gabe Lewis — Electronic Trading Systems (Sabre Integration)<br>🌿 Nellie Bertram — Special Projects: ESG & Thematic Investing |
+| **Limited Partners** | Clients & Vendors | 🧊 Bob Vance — Anchor LP — Bob Vance, Vance Refrigeration |
+
+Michael (Managing Partner) is **you**, the boss. Jim, the assistant, runs execution. The single source of truth for everyone is [`firm/roster.json`](firm/roster.json). Edit a title, voice, duty or keywords there and the desk, chat router, subagents and UI all pick it up.
+
+### Props
+
+Every cast member gets a signature prop above their desk. The originals are still here (World's Best Boss mug, Dundie, Schrute Buck, jello stapler, pretzel, Serenity by Jan, Finer Things Club, Angela's cats), plus new trading props drawn by `scripts/generate-trading-props.py`:
+
+<p align="center">
+  <img src="docs/images/prop-bear-market.png" alt="Bear market (Dwight)" height="64" title="Bear market — Dwight">
+  <img src="docs/images/prop-bull-market.png" alt="Bull market (Michael)" height="64" title="Bull market — Michael / Robert California">
+  <img src="docs/images/prop-candlestick-chart.png" alt="Candlestick chart (Oscar)" height="64" title="Candlestick chart — Oscar / Karen">
+  <img src="docs/images/prop-calculator-keleven.png" alt="Keleven calculator (Kevin)" height="64" title="Keleven calculator — Kevin">
+  <img src="docs/images/prop-trade-ticket.png" alt="Trade ticket (Jim)" height="64" title="Trade ticket — Jim">
+  <img src="docs/images/prop-bond-certificate.png" alt="Bond certificate (Stanley)" height="64" title="Treasury bond — Stanley">
+  <img src="docs/images/prop-wuphf-coin.png" alt="WUPHF token (Ryan)" height="64" title="WUPHF token — Ryan">
+  <img src="docs/images/prop-client-report.png" alt="Client report (Pam)" height="64" title="Client report — Pam">
+  <img src="docs/images/prop-compliance-stamp.png" alt="Compliance stamp (Toby)" height="64" title="Compliance stamp — Toby / Holly">
+  <img src="docs/images/prop-gold-bar.png" alt="Gold bars (Meredith)" height="64" title="Gold bars — Meredith">
+  <img src="docs/images/prop-ticker-terminal.png" alt="Ticker terminal (Gabe / Darryl)" height="64" title="Ticker terminal — Gabe / Darryl">
+  <img src="docs/images/prop-dunder-mifflin-capital-logo.png" alt="Dunder Mifflin Capital logo" height="64" title="Firm logo — David Wallace">
 </p>
 
-**What changes when you toggle it on**
-- 27 cast members (Michael, Jim, Pam, Dwight, Kevin, Angela, Stanley, Creed, David Wallace, Bob Vance — the whole office) dealt to agent roles
-- Role chatter swaps to in-character lines (`"Bears. Beets. Battlestar Galactica."`, `"selling paper"`, `"Schrute bucks awarded"`)
-- Michael occasionally lands his signature `"That's what she said 😏"` when replying to finished work
-- Character prop overlays — Michael rotates World's Best Boss mug / Dundie / Golden Ticket / Prison Mike bandana / "NO GOD PLEASE NO", Dwight gets the CPR dummy mask or a Schrute Buck, Jim keeps his jello stapler, Stanley gets a pretzel, Jan gets a Serenity by Jan candle, Oscar / Pam / Toby share the Finer Things Club
-- Angela gets a follower cat *and* a head-cat (randomized from 12 cat sprites)
-- Kevin's chili, pretzel day, and Finer Things Club references sprinkled through the break-room chatter
+A scrolling **ticker tape** across the top of the floor shows the book on the desk: holdings, P&L or 1-year return, vol, VaR, and whether Angela is upset.
+
+### Use them from Claude Code
+
+`.claude/agents/` has a subagent for every employee (`risk-manager`, `quant-researcher`, `income-strategist`, `execution-trader`, `fund-controller`…), generated from the roster by `scripts/generate-subagents.py`. In Claude Code, say "use the risk-manager agent to stress-test this portfolio". With the hooks installed, Dwight walks into the office while he works.
+
+You can also start a review over HTTP:
+
+```bash
+curl -s -X POST http://127.0.0.1:3334/portfolio -H 'Content-Type: application/json' \
+  -d '{"text": "AAPL 40%, MSFT 30%, TLT 30% | conservative, name: Jan"}'
+```
+
+### Desk settings — `firm/desk.config.json`
+
+| Setting | Default | What it does |
+|---|---|---|
+| `llm` | `"claude"` | `"claude"` uses the Claude Code CLI for every agent. `"offline"` uses templates (fast, free, less funny). The desk also falls back to templates on its own if the CLI is missing or a call fails. |
+| `model` | `""` | Passed to `claude --model` (e.g. `"sonnet"`). |
+| `liveResearch` | `false` | Lets analysts use WebSearch/WebFetch for current news and data. This is slower and uses more tokens. |
+| `marketData` | `"yahoo"` | Pulls 1 year of daily prices (best-effort, unofficial Yahoo endpoint) for real vol, correlation, beta and drawdown, and fills in missing prices. `"off"` uses model estimates. |
+| `concurrency` | `3` | How many analysts work at once. |
+| `paceMs` | `2200` | Gap between chat lines, so you can read along. |
+
+Commands: `/portfolio`, `/desk` (status), `/roster` (who does what), `/reports` (recent reports), `/the-office` or `/trading-floor` (toggle the theme; it's on by default).
+
+> **Disclaimer (Toby insisted):** the desk is a parody. Its analysis is educational and is not investment, tax or legal advice. The numbers come from your inputs plus simple models or public price data. Check everything with a licensed professional before trading.
 
 ### The cast
 <p align="center">
@@ -37,41 +127,6 @@ Type `/the-office` in the Slack chat panel to flip the whole office into a Scran
   <img src="docs/images/david-wallace.png" alt="David Wallace" height="140">
   <img src="docs/images/bob-vance.png" alt="Bob Vance, Vance Refrigeration" height="140">
 </p>
-
-### Easter-egg props
-Each cast member gets a signature prop floating above their desk in place of the usual coffee/Red Bull bubble.
-
-<p align="center">
-  <img src="docs/images/prop-worlds-best-boss.png" alt="World's Best Boss mug (Michael)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-dundie.png" alt="Dundie Award (Michael)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-golden-ticket.png" alt="Golden Ticket (Michael)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-prison-mike.png" alt="Prison Mike bandana (Michael)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-no-god.png" alt="NO GOD PLEASE NO (Michael)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-cpr-mask.png" alt="CPR Dummy Mask (Dwight)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-schrute-buck.png" alt="Schrute Buck (Dwight)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-jello-stapler.png" alt="Jello Stapler (Jim)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-pretzel.png" alt="Pretzel Day (Stanley)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-serenity-candle.png" alt="Serenity by Jan (Jan)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-finer-things.png" alt="Finer Things Club (Oscar / Pam / Toby)" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-paper-box.png" alt="Dunder Mifflin Paper Box" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-dunder-logo.png" alt="Dunder Mifflin Logo" height="70">
-  &nbsp;&nbsp;
-  <img src="docs/images/prop-angela-cat.png" alt="Angela's cat" height="70">
-</p>
-
-Toggle it off any time with `/the-office` again — state persists in `localStorage`.
 
 ---
 
@@ -209,6 +264,10 @@ python3 scripts/extract-boss-sprite.py your-character.png MyChar-1
 
 | Command | Description |
 |---------|-------------|
+| `/portfolio <holdings> \| <mandate>` | Send a book to the trading desk |
+| `/desk` | Trading desk status / last report |
+| `/roster` | Who works in which department |
+| `/reports` | Links to recent client reports |
 | `/status` | Office stats — agents, clients |
 | `/agents` | List active agents |
 | `/help` | Show available commands |
@@ -262,13 +321,20 @@ Claude-Office/
 │   ├── hooks/              # useAgentSocket (WebSocket + reconnect)
 │   ├── styles/             # office.css, rooms.css
 │   └── App.tsx             # Main app (agent lifecycle, events, chat)
+├── firm/                   # Dunder Mifflin Capital
+│   ├── roster.json         # every employee: department, title, desk duty, voice, keywords
+│   └── desk.config.json    # desk settings (LLM, market data, pacing)
 ├── server/                 # Express + WebSocket server
 │   ├── index.js            # HTTP endpoints + WS broadcast
-│   └── chat-db.js          # SQLite wrapper
+│   ├── chat-db.js          # SQLite wrapper
+│   └── desk/               # the trading desk: parser, analytics, prompts, orchestration, report
 ├── scripts/                # Shell scripts
 │   ├── start-office.sh     # Start everything
 │   ├── stop-office.sh      # Stop everything
-│   ├── chat-ai-watcher.sh  # Polls chat, generates Claude replies
+│   ├── chat-ai-watcher.sh  # Polls chat, generates in-character replies
+│   ├── desk-router.py      # Routes chat to the right character + builds their prompt
+│   ├── generate-subagents.py       # .claude/agents/* from the roster
+│   ├── generate-trading-props.py   # draws the trading props
 │   └── gather-context.sh   # Git/agent context for prompts
 ├── hooks/                  # Claude Code hooks
 │   └── agent-tracker.sh    # Forwards events to server
