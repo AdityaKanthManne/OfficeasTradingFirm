@@ -51,11 +51,14 @@ interface SlackChatProps {
   dayPhase: string
   /** Role/name currently typing — shows animated dots below the message list */
   typingUser?: string | null
+  /** face-to-face on the floor: your messages go to this person */
+  talkingTo?: { name: string; color: string } | null
+  onEndTalk?: () => void
   /** ID of the last message seen by the assistant — renders a tiny seen avatar */
   lastSeenId?: number | null
 }
 
-const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggleMute, onVolumeChange, onSendMessage, onReaction, autoTypeText, dayPhase, typingUser, lastSeenId }) => {
+const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggleMute, onVolumeChange, onSendMessage, onReaction, autoTypeText, dayPhase, typingUser, lastSeenId, talkingTo, onEndTalk }) => {
   const theme = useTheme()
   void theme // Why: subscribe so avatars re-render when /the-office toggles
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -263,6 +266,7 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
         {showSlashHint && (
           <div className="slack-slash-hint">
             <span className="slack-slash-cmd" title="Send a book to the desk: /portfolio AAPL 30%, MSFT 20%, TLT 30%, CASH 20% | moderate">/portfolio</span>
+            <span className="slack-slash-cmd" title="All-hands briefing: everyone gives their take on a ticker, Jim wraps up — /briefing AAPL should we add?">/briefing</span>
             <span className="slack-slash-cmd">/desk</span>
             <span className="slack-slash-cmd">/roster</span>
             <span className="slack-slash-cmd">/reports</span>
@@ -271,11 +275,18 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
             <span className="slack-slash-cmd">/the-office</span>
           </div>
         )}
+        {talkingTo && (
+          <div className="slack-talking" style={{ borderColor: talkingTo.color }}>
+            <span className="slack-talking-dot" style={{ background: talkingTo.color }} />
+            <span>Talking with <b>{talkingTo.name}</b> — ask them anything</span>
+            <button onClick={onEndTalk} title="End the conversation" aria-label="End the conversation">×</button>
+          </div>
+        )}
         <div className="slack-input-bar">
           <input
             type="text"
             className="slack-input-field"
-            placeholder={getTheme() === 'office' ? 'Message #trading-floor — try /portfolio AAPL 40%, MSFT 30%, TLT 30%' : 'Message #office-general'}
+            placeholder={talkingTo ? `Say something to ${talkingTo.name.split(' ')[0]}…` : getTheme() === 'office' ? 'Message #trading-floor — try /portfolio AAPL 40%, MSFT 30%, TLT 30%' : 'Message #office-general'}
             value={inputText}
             onChange={e => {
               const val = e.target.value
@@ -294,9 +305,14 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
                   toggleTheme()
                   const nowOn = getTheme() === 'office'
                   onSendMessage?.(nowOn ? `📈 ${FIRM.name}: the trading floor is OPEN. Bears. Beets. Bear markets.` : '🔁 Trading floor theme: OFF')
+                  // The Scranton floor map vs the classic room is chosen at load — reload to swap
+                  setTimeout(() => window.location.reload(), 700)
                 } else {
                   // The desk is staffed by the Office cast — make sure they're on screen
-                  if (/^\/(portfolio|book)\b/i.test(trimmed) && getTheme() !== 'office') setTheme('office')
+                  if (/^\/(portfolio|book)\b/i.test(trimmed) && getTheme() !== 'office') {
+                    setTheme('office')
+                    setTimeout(() => window.location.reload(), 900)
+                  }
                   onSendMessage?.(trimmed)
                 }
                 setInputText('')

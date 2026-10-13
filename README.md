@@ -84,6 +84,113 @@ Every cast member gets a signature prop above their desk. The originals are stil
 
 A scrolling **ticker tape** across the top of the floor shows the book on the desk: holdings, P&L or 1-year return, vol, VaR, and whether Angela is upset.
 
+### The Scranton floor map
+
+With the trading-floor theme on (the default), the office is the whole Dunder Mifflin Scranton floor. It's rebuilt tile by tile in the original Claude Office style: cream walls with dark outlines, slate carpet, and the original standing desks, plants, filing cabinets, printer, coffee machine and whiteboard. Every room is there: the elevators, the waiting area, reception, Michael's glass office, the conference room, the bullpen, accounting, the supply closet, the copy alcove, the red-carpet stairs to the warehouse, the break room (vending machines, Finer Things Club), the kitchen, the restrooms, the annex and Ryan's closet.
+
+Every wall and piece of furniture is its own layer, so people walk behind desks and low walls and in front of them, and you can see them through Michael's glass.
+
+**Camera (Zillow-style).** The angle is fixed. You see one part of the office close up and move between parts:
+
+| Control | What it does |
+|---|---|
+| ‹ › ˄ ˅ edge arrows | Slide to the next part of the office |
+| Drag the floor | Pan freely |
+| Minimap (top right) | Click anywhere to jump there; the yellow box is what you're looking at |
+| **Go to…** menu | Jump straight to a room |
+| − / + or the mouse wheel | Zoom from the whole floor ("All") down to a close-up |
+
+**Driving Michael.**
+
+| Control | What it does |
+|---|---|
+| D-pad (bottom right) | Walk along the floor's axes (↖ ↗ ↘ ↙). Hold to keep walking |
+| Arrow keys / WASD | Walk (up+right = ↗, etc.). Ignored while you're typing in chat |
+| Click the floor | Michael walks to that spot and waits there |
+| Drag Michael | Pick him up and carry him (the camera slides when you reach an edge), then drop him. He lands on the nearest floor spot, or sits down if you drop him on a free chair or the couch. Drop him on his own chair and he's back at work. |
+| Michael's face | Camera follows him again |
+| 🏠 Desk | He walks back to his desk |
+
+Walls, desks and furniture block him; he slides along them instead of walking through. Everyone else finds their way with A* pathfinding on the same walk grid.
+
+**Nameplates.** Everyone has a nameplate under their feet in their colour; zoom in further and it adds their job title. Nameplates sit on their own top layer, so desks and walls never hide them, and they hide in the zoomed-out overview.
+
+**The office clock** (title bar). The office has its own date and time. It runs in real time but only moves forward:
+
+- **+2h** jumps two hours ahead.
+- **⏭ Skip to…** picks any later date and time, with shortcuts for *Next 9 AM*, *Next market open (Mon–Fri 9:30)* and *Next 5 PM*. Earlier times are refused.
+
+The server keeps the clock (in `~/.agent-office/clock.json`), so reloading the page or restarting the office can't rewind it. Every jump is noted in chat. The day/night lighting follows the office clock, using Scranton's sunrise and sunset, and so do chat timestamps. The AUTO/DAY/NIGHT button still overrides the lighting. To reset the clock to real time, stop the office and delete `~/.agent-office/clock.json`.
+
+**Sitting.** People sit at desks, in the conference rows, at the kitchen, break-room and annex tables, on the waiting couch and in Michael's guest chairs. A chair back facing the camera is drawn in front of the person, so you see head and shoulders over it; behind a desk, they're hidden at the waist. Standing spots stay standing: the front of the conference room, the walls during a packed meeting, the coffee machine, water coolers, copier, filing cabinet and warehouse stairs.
+
+**Live market data (Alpha Vantage).** Put your key in `firm/desk.secrets.json`:
+
+```json
+{ "alphaVantageKey": "YOUR_KEY" }
+```
+
+That file is git-ignored, so your key never goes to GitHub. You can also set `ALPHAVANTAGE_API_KEY` instead. `firm/desk.secrets.example.json` shows the format.
+
+- Live quotes come from Alpha Vantage: price, today's change, the day's range and volume, plus Bitcoin and Ethereum via its currency endpoint.
+- A year of daily history comes from Yahoo, with Alpha Vantage's 100-day history as the backup.
+- The free plan allows about 25 calls a day, so everything is cached in `~/.agent-office/av-cache.json`, which survives restarts. Quotes are cached for 5 minutes while the market is open and 1 hour when it's closed, history for 12 hours.
+- If Alpha Vantage says the daily limit is used up, the office stops asking until tomorrow and falls back to Yahoo or model estimates.
+- Type `/market` to see whether the market is open and how many Alpha Vantage calls you've used today.
+
+**The opening bell.** The office follows NYSE hours (9:30–16:00 New York time, Monday–Friday, NYSE holidays off) on the office clock. At the opening bell, Michael rings it, everyone is called onto the floor, and everyone goes to their desk (desk-sharers find a shared spot). Staff called in at the bell stay until you dismiss them. If you open the office during market hours, the same happens a few seconds after it loads. Skipping the clock to a market open (+2h, or *Skip to… Next market open*) rings the bell too. The closing bell is just an announcement.
+
+**Ask the group chat.** Ask anything in #trading-floor and the people whose field it is answer, in character. "How is apple doing today" gets Oscar on price and trend, Kelly on sentiment and Dwight on risk. "What's the Fed going to do" gets Jan. "Is it a good time to buy bitcoin" gets Ryan.
+
+- Name someone ("Dwight, how risky is TSLA?") and they answer.
+- Company names, tickers and `$TICKER` are recognised, and the live quote is handed to whoever answers.
+- Answers come from the Claude Code CLI when `"llm": "claude"` is set, otherwise from built-in lines.
+- The **AI On/Off** switch in the chat header turns staff answers on and off.
+
+**Click to talk.** Click anyone on the floor and Michael walks over and starts a conversation with them: the same walk-up conversation as below, without having to walk there yourself.
+
+**All-hands briefing.** Type `/briefing AAPL` (optionally add a question, e.g. `/briefing NVDA is this too crowded?`). Michael calls everyone into the conference room and Jim runs the room. The other 25 each give one take from their own job's angle, with a speech bubble and a 🟢/⚪/🔴 stance in chat. They go branch by branch:
+
+| Branch | Who |
+|---|---|
+| Trading & Risk | Dwight, Stanley, Phyllis, Andy |
+| Research & Quant | Oscar, Karen |
+| Compliance & Finance | Angela, Kevin, Toby, Holly |
+| Operations & Technology | Darryl, Roy, Gabe, Erin, Pam |
+| Market Intelligence | Kelly, Ryan, Creed, Meredith, Carol, Nellie |
+| Investment Committee | David Wallace, Robert California, Jan, Bob Vance |
+
+Jim wraps up with the tally and the desk view. Pam posts a report with every take, a note per person and the numbers (it shows up under `/reports`), then the meeting breaks up.
+
+- With market data on, the takes use one year of daily prices: last price, 1-year and 3-month returns, volatility, drawdown, beta vs SPY, distance from the 52-week high and the 200-day trend. Otherwise they work from model estimates.
+- With `"llm": "claude"`, every take is written by Claude in character (one call per branch, started up front). Otherwise built-in lines are used.
+- Walk-up greetings pause while a meeting is on. In a packed room, only the person speaking shows a nameplate.
+
+**Walk-up conversations.** Walk, click or drop Michael next to someone and stop there. They greet you in character, or tell you what they're in the middle of, with a speech bubble over their head and the line in chat. A *Talking with Dwight Schrute* chip appears above the chat box, and until you walk away, whatever you type goes to them. They answer as that character, in chat and in a bubble.
+
+- If you ask about the book, they answer from the latest portfolio on the desk.
+- Replies come from the Claude Code CLI when `"llm": "claude"` is set in `firm/desk.config.json`. Otherwise built-in lines in each character's voice are used.
+- Walking more than a few steps away, leaving the room or clicking × ends the conversation.
+- People don't greet you again for 90 seconds, and walking past doesn't count; Michael has to stop.
+
+**Who looks where.** Whoever Michael is talking to faces him, and he faces them. Everyone else in the room glances up at him now and then for a few seconds, then goes back to work; when he leaves the room they all go back to their screens. People talking to each other in chat turn to face each other when they're nearby. Otherwise everyone faces their screen.
+
+- **Everyone sits at their own desk.** Pam is at reception. Jim and Dwight face each other, and so do Stanley and Phyllis. Andy and Nellie are next, with Meredith and Creed in the back row. Kevin, Angela and Oscar are in accounting. Kelly, Toby, Gabe and Ryan (in his closet) are in the annex, and Darryl and Roy are at the warehouse stairs.
+- **People who share a desk take turns.** Pam and Erin share reception, Toby and Holly share the HR desk, and Andy and Karen share a sales desk. Whoever arrives first sits down. The other floats around the waiting area, the kitchen, the break room, the annex table or Michael's guest chairs. Visitors (David Wallace, Jan, Robert California, Bob Vance, Carol) float the same way.
+- **The call bar** (bottom left):
+
+  | Button | What happens |
+  |---|---|
+  | 📞 **Call Staff** | Opens the directory. Call one person onto the floor, or send them home. |
+  | 📢 **Meeting** | All-staff meeting. Everyone walks into the conference room, Michael takes the front, and the rest fill the four rows of chairs and stand along the walls. |
+  | 🗂 **Planning ▾** | Pick a segment (Risk, Research, Fund Accounting…). Only that team and Michael go into the conference room. |
+  | 🪑 **Go to desk** | Ends any meeting and sends everyone to their own desk. On a shared desk, whoever is sitting there keeps it; otherwise the first owner gets it (Pam before Erin). The other sharer and any visitors go to a shared spot: the kitchen, break room, waiting area, annex table or Michael's guest chairs. Michael stays where you put him. |
+  | 🏠 **Dismiss** | Ends any meeting and sends everyone home through the elevators. |
+
+  From chat you can also use `/meeting [topic]` and `/meeting end`. The `/portfolio` desk huddle happens in the conference room too.
+- **Changing the map:** the whole layout (rooms, walls, doors, desks, seats, props) lives in `scripts/build-scranton-iso.py`. Edit it, then run `python3 scripts/build-scranton-iso.py --preview`. That redraws the floor (day and night), the furniture atlas, the minimap and the walk grid into `public/rooms/` and `firm/scranton-floor.json`, and writes a full picture to `docs/reference/scranton-iso-preview.png`. Restart Vite afterwards so it serves the new images.
+- Want the old single room back? Open `http://localhost:3333/?classic`.
+
 ### Use them from Claude Code
 
 `.claude/agents/` has a subagent for every employee (`risk-manager`, `quant-researcher`, `income-strategist`, `execution-trader`, `fund-controller`…), generated from the roster by `scripts/generate-subagents.py`. In Claude Code, say "use the risk-manager agent to stress-test this portfolio". With the hooks installed, Dwight walks into the office while he works.
@@ -106,7 +213,7 @@ curl -s -X POST http://127.0.0.1:3334/portfolio -H 'Content-Type: application/js
 | `concurrency` | `3` | How many analysts work at once. |
 | `paceMs` | `2200` | Gap between chat lines, so you can read along. |
 
-Commands: `/portfolio`, `/desk` (status), `/roster` (who does what), `/reports` (recent reports), `/the-office` or `/trading-floor` (toggle the theme; it's on by default).
+Commands: `/portfolio`, `/meeting [topic]` / `/meeting end`, `/desk` (status), `/roster` (who does what), `/reports` (recent reports), `/the-office` or `/trading-floor` (toggle the theme; it's on by default).
 
 > **Disclaimer (Toby insisted):** the desk is a parody. Its analysis is educational and is not investment, tax or legal advice. The numbers come from your inputs plus simple models or public price data. Check everything with a licensed professional before trading.
 

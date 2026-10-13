@@ -219,3 +219,29 @@ export function assumedCorrelation(a, b) {
   if (ga === 'EQ' && gb === 'EQ' && a.sector === b.sector && a.sector !== 'Unclassified') return 0.8
   return RHO[`${ga}|${gb}`] ?? RHO[`${gb}|${ga}`] ?? 0.3
 }
+
+// ---------------------------------------------------------------------------
+// Tickers mentioned in plain chat ("how is apple doing today", "$NVDA", "what about TSLA")
+// ---------------------------------------------------------------------------
+const ALIASES = {
+  apple: 'AAPL', microsoft: 'MSFT', nvidia: 'NVDA', intel: 'INTC', broadcom: 'AVGO', oracle: 'ORCL', adobe: 'ADBE',
+  palantir: 'PLTR', snowflake: 'SNOW', shopify: 'SHOP', google: 'GOOGL', alphabet: 'GOOGL', meta: 'META', facebook: 'META',
+  netflix: 'NFLX', amazon: 'AMZN', tesla: 'TSLA', starbucks: 'SBUX', berkshire: 'BRK.B', coinbase: 'COIN', costco: 'COST',
+  abbvie: 'ABBV', bitcoin: 'BTC', btc: 'BTC', ethereum: 'ETH', ether: 'ETH', dogecoin: 'DOGE', gold: 'GLD', silver: 'SLV',
+  oil: 'USO', crude: 'USO', treasuries: 'TLT', treasury: 'TLT', 's&p': 'SPY', 'the market': 'SPY', 'the s&p': 'SPY',
+  nasdaq: 'QQQ', dow: 'DIA', 'russell': 'IWM', microstrategy: 'MSTR', amd: 'AMD', reits: 'VNQ',
+}
+const NOT_TICKERS = new Set(['A', 'I', 'IT', 'ON', 'SO', 'DO', 'GO', 'BE', 'ALL', 'ARE', 'OR', 'AND', 'THE', 'FOR', 'HOW', 'NOW', 'NEW', 'ANY', 'CAN', 'OUT', 'UP', 'US', 'AI', 'OK', 'PM', 'AM', 'ET', 'CEO', 'IPO', 'ETF', 'USD', 'EOD', 'YTD'])
+
+export function tickersInText(text) {
+  const out = []
+  const add = t => { if (t && !out.includes(t)) out.push(t) }
+  const s = String(text)
+  for (const m of s.matchAll(/\$([A-Za-z]{1,5}(?:\.[A-Za-z])?)\b/g)) add(m[1].toUpperCase())
+  for (const m of s.matchAll(/\b([A-Z]{2,5}(?:\.[A-Z])?)\b/g)) if (MAP[m[1]] && !NOT_TICKERS.has(m[1])) add(m[1])
+  const low = s.toLowerCase()
+  for (const [name, t] of Object.entries(ALIASES)) {
+    if (new RegExp(`(^|[^a-z])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(low)) add(t)
+  }
+  return out.slice(0, 3)
+}

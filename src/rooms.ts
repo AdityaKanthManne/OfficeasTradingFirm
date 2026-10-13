@@ -1,4 +1,5 @@
 // ===== ROOM DEFINITIONS =====
+import { SCRANTON_ROOM } from './floor'
 // Each room is an empty shell with positions for furniture placement
 // Furniture items are placed on a grid within each room
 
@@ -14,6 +15,7 @@ export type RoomId =
   | 'rooftop'
   | 'gym'
   | 'parking'
+  | 'scranton-floor'
 
 export interface Waypoint {
   id: string
@@ -76,6 +78,7 @@ export interface Room {
 // ===== ROOM DEFINITIONS =====
 
 export const ROOMS: Record<RoomId, Room> = {
+  'scranton-floor': SCRANTON_ROOM,
   'main-office': {
     id: 'main-office',
     name: 'Main Office',

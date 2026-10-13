@@ -13,6 +13,7 @@ Prints JSON:
 Routing order:
   1. A character named in the message ("Oscar, ...", "ask Kevin") answers.
   2. Finance keywords from firm/roster.json pick the department.
+     (No keywords? Whoever you last called with the office phone answers.)
   3. Dev keywords (bugs, PRs, CSS…) fall back to the original Claude Office agents.
   4. Otherwise the assistant (Claude / Jim on the trading floor) answers.
 """
@@ -30,6 +31,7 @@ EMPLOYEES = ROSTER["employees"]
 DEPTS = {d["id"]: d for d in ROSTER["departments"]}
 BY_ROLE = {e["role"]: e for e in EMPLOYEES}
 LATEST = os.path.join(os.path.expanduser("~"), ".agent-office", "desk-latest.json")
+ON_CALL = os.path.join(os.path.expanduser("~"), ".agent-office", "on-call.json")
 
 # Who loves to butt in on whom — used for the occasional second voice
 RIVALS = {
@@ -96,6 +98,13 @@ def route(message):
             best, best_score = e, score
     if best and best_score > 0:
         return best["role"]
+    # 2b. Whoever you last called onto the floor with the office phone takes general questions
+    try:
+        on_call = json.load(open(ON_CALL))
+        if on_call and on_call[0].get("role") in BY_ROLE and not any(hits(msg, w) for w, _r, _n in DEV_ROUTES):
+            return on_call[0]["role"]
+    except Exception:
+        pass
     # 3. Dev keywords (original Claude Office agents)
     for words, role, _name in DEV_ROUTES:
         if hits(msg, words):

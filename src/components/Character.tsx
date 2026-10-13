@@ -16,7 +16,25 @@ interface CharacterProps {
   zIndex?: number
   /** Show typing indicator (about to post a Slack message) */
   isTyping?: boolean
+  /** Sprite height in px (Scranton floor map scales characters with the map) */
+  spriteHeight?: number
+  /** Iso Scranton map: pick the sprite whose face points the way they walk */
+  isoFacing?: boolean
+  /** Look this way while standing/sitting (e.g. at Michael, or whoever they're talking to) */
+  facingOverride?: SpriteDirection
+  /** Seated at a desk / meeting row / table / couch — draw the sitting pose */
+  sitting?: boolean
+  /** Michael can be picked up and dropped */
+  pickable?: boolean
+  /** currently being carried by the mouse */
+  carried?: boolean
+  /** click to start a conversation with them */
+  clickable?: boolean
 }
+
+/** Where the hips are on the cast sprites (fraction of height from the top) and how much the legs fold. */
+const HIP = 0.56
+const LEG_FOLD = 0.42
 
 // Movement direction → sprite variant
 // front-left  = moving up-right
@@ -35,6 +53,14 @@ function getDirectionFromDelta(dx: number, dy: number): SpriteDirection {
   if (dy < 0 && dx < 0)   return 'front-right'  // up-left
   if (dy >= 0 && dx >= 0)  return 'rear-left'    // down-right
   return 'front-left'                             // down-left
+}
+
+// The cast sprites are named from the character's point of view:
+// front-left faces screen down-right, front-right faces down-left,
+// rear-left faces up-left, rear-right faces up-right.
+function getIsoDirection(dx: number, dy: number): SpriteDirection {
+  if (dy >= 0) return dx >= 0 ? 'front-left' : 'front-right'
+  return dx >= 0 ? 'rear-right' : 'rear-left'
 }
 
 function getCharBase(role: string): string {
@@ -66,7 +92,7 @@ const OPPOSITE: Record<SpriteDirection, SpriteDirection> = {
   'rear-right': 'front-left',
 }
 
-const Character: React.FC<CharacterProps> = ({ agent, idleDurationMs = 0, zIndex, isTyping }) => {
+const Character: React.FC<CharacterProps> = ({ agent, idleDurationMs = 0, zIndex, isTyping, spriteHeight, isoFacing, facingOverride, sitting, pickable, carried, clickable }) => {
   const prevPosRef = useRef({ x: agent.position.x, y: agent.position.y })
   const directionRef = useRef<SpriteDirection>(agent.spriteFacing ?? 'front-right')
   const [turnedAround, setTurnedAround] = useState(false)
@@ -79,10 +105,14 @@ const Character: React.FC<CharacterProps> = ({ agent, idleDurationMs = 0, zIndex
   const dy = agent.position.y - prevPosRef.current.y
 
   if (isMoving && (Math.abs(dx) > 0.005 || Math.abs(dy) > 0.005)) {
-    directionRef.current = getDirectionFromDelta(dx, dy)
+    // dx/dy are in map %, the map is ~1.8× wider than tall — compare in screen terms
+    directionRef.current = isoFacing ? getIsoDirection(dx, dy * 0.56) : getDirectionFromDelta(dx, dy)
+  } else if (!isMoving && facingOverride) {
+    directionRef.current = facingOverride
   } else if (!isMoving && agent.spriteFacing) {
     // At a spot — use the spot's facing direction (or opposite if turned around)
-    directionRef.current = turnedAround ? OPPOSITE[agent.spriteFacing] : agent.spriteFacing
+    // iso map: people keep their eyes on the screen (no random turning around)
+    directionRef.current = turnedAround && !isoFacing ? OPPOSITE[agent.spriteFacing] : agent.spriteFacing
   }
   prevPosRef.current = { x: agent.position.x, y: agent.position.y }
 
@@ -133,7 +163,10 @@ const Character: React.FC<CharacterProps> = ({ agent, idleDurationMs = 0, zIndex
 
   return (
     <div
-      className={`character-wrapper state-${animState}`}
+      className={`character-wrapper state-${animState}${sitting && !carried ? ' seated' : ''}${carried ? ' carried' : ''}${pickable ? ' pickable' : ''}${clickable ? ' clickable' : ''}`}
+      data-pick={pickable ? agent.id : undefined}
+      data-person={clickable ? agent.id : undefined}
+      title={pickable ? 'Drag to pick up Michael and drop him anywhere' : clickable ? 'Click to talk' : undefined}
       style={{
         left: `${agent.position.x}%`,
         top: `${agent.position.y}%`,
@@ -149,18 +182,40 @@ const Character: React.FC<CharacterProps> = ({ agent, idleDurationMs = 0, zIndex
 
       <div className="char-body-group">
         <div className="char-shadow" />
-        <img
-          src={spriteSrc}
-          alt={agent.name}
-          className="char-sprite"
-          style={{
-            height: agent.id.startsWith('boss-') ? 85 : 78,
-            width: 'auto',
+        {sitting && !carried ? (() => {
+          // Seated pose: torso as drawn, legs folded (foreshortened thighs) — feet stay on the floor
+          const H = spriteHeight ?? (agent.id.startsWith('boss-') ? 85 : 78)
+          const top = Math.round(H * HIP), legs = Math.max(1, Math.round(H * (1 - HIP) * LEG_FOLD))
+          const imgStyle: React.CSSProperties = {
+            height: H, width: 'auto',
             filter: `drop-shadow(0 0 1px ${agent.color}) drop-shadow(0 0 0.5px #000)`,
             animationDelay: `${(agent.id.charCodeAt(0) * 0.37) % 3}s`,
-          }}
-          draggable={false}
-        />
+          }
+          return (
+            <div className="char-seated">
+              <div style={{ height: top, overflow: 'hidden' }}>
+                <img src={spriteSrc} alt={agent.name} className="char-sprite" style={imgStyle} draggable={false} />
+              </div>
+              <div style={{ height: legs, overflow: 'hidden' }}>
+                <img src={spriteSrc} alt="" className="char-sprite char-legs" draggable={false}
+                  style={{ ...imgStyle, transformOrigin: 'top', transform: `translateY(${-top * LEG_FOLD}px) scaleY(${LEG_FOLD})` }} />
+              </div>
+            </div>
+          )
+        })() : (
+          <img
+            src={spriteSrc}
+            alt={agent.name}
+            className="char-sprite"
+            style={{
+              height: spriteHeight ?? (agent.id.startsWith('boss-') ? 85 : 78),
+              width: 'auto',
+              filter: `drop-shadow(0 0 1px ${agent.color}) drop-shadow(0 0 0.5px #000)`,
+              animationDelay: `${(agent.id.charCodeAt(0) * 0.37) % 3}s`,
+            }}
+            draggable={false}
+          />
+        )}
       </div>
     </div>
   )

@@ -186,3 +186,12 @@ export function toggleMute() {
   syncAmbientVolume()
   return masterVolume === 0
 }
+
+/** Office desk-phone ring (two short trills) — used by the Call Staff phone */
+export function playPhoneRing() {
+  const trill = (t: number) => {
+    for (let i = 0; i < 6; i++) setTimeout(() => beep(i % 2 ? 1320 : 1480, 0.05, 'sine', 0.05), t + i * 55)
+  }
+  trill(0)
+  trill(450)
+}

@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
 import './styles/office.css'
 import './styles/rooms.css'
 import SlackChat, { ChatMessage } from './components/SlackChat'
 import Character from './components/Character'
 import FurnitureRenderer from './components/FurnitureRenderer'
 import { Agent, OfficeEvent, AGENT_CONFIGS } from './types'
-import { getCurrentPhase, getPhaseLabel, type DayPhase } from './daylight'
-import { ROOMS } from './rooms'
+import { getCurrentPhase, getPhaseLabel, phaseAt, nightAt, type DayPhase } from './daylight'
+import OfficeClock from './components/OfficeClock'
+import { EMPLOYEE_BY_ROLE } from './firm'
+import { ROOMS, type AgentSpot } from './rooms'
 import { useAgentSocket } from './hooks/useAgentSocket'
 import * as sfx from './sounds'
 import {
@@ -26,6 +28,11 @@ import {
 } from './agentManager'
 import { BOSS_ROLE, BOSS_NAME } from './config'
 import TickerTape, { type DeskState } from './components/TickerTape'
+import StaffPhone from './components/StaffPhone'
+import { SCRANTON_ROOM, FLOOR, FLOOR_SPOTS, roomPhrase, IS_ISO, findGridPath, pctToWorld, worldToPct, walkable, roomAt, facingToward, seatAt, nearestWalkable } from './floor'
+import FloorCamera, { type CameraApi } from './components/FloorCamera'
+import { getCharacterBaseForRole, themedDisplayName } from './theme'
+import { ROLE_TO_CHAR } from './config'
 import { FIRM } from './firm'
 import { pickEvent } from './events'
 import { getInteraction } from './interactions'
@@ -51,15 +58,23 @@ if (params.get('theme') === 'office') { _setTheme('office') }
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** how far the office clock is ahead of real time (forward-only; set from the server) */
+let officeClockOffsetMs = 0
 function timeNow(): string {
-  return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  return new Date(Date.now() + officeClockOffsetMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
 let nextMsgId = 1
 function makeMsgId() { return nextMsgId++ }
 
-// Room spots for main office
-const MAIN_ROOM = ROOMS['main-office']
+// Room: the full Scranton floor when the trading-floor (Office) theme is on, otherwise the classic room.
+// Why: positions are percentages of the room art, so the room is fixed per page load
+// (toggling the theme reloads the page). ?classic forces the old single room.
+const FLOOR_MODE = getTheme() === 'office' && !params.has('classic') && !isSimMode
+const MAIN_ROOM = FLOOR_MODE ? SCRANTON_ROOM : ROOMS['main-office']
+/** Iso map: tile-built Scranton with a close-up camera, depth-sorted sprites and grid pathfinding */
+const ISO_MODE = FLOOR_MODE && IS_ISO
+const FLOOR_SPEED = ISO_MODE ? 0.85 : FLOOR_MODE ? 1.7 : 1
 const ENTRY = MAIN_ROOM.entryPoint           // door position (%)
 const COFFEE_SPOT = MAIN_ROOM.agentSpots.find(s => s.type === 'coffee') ?? null
 const WATER_SPOTS  = MAIN_ROOM.agentSpots.filter(s => s.type === 'water')
@@ -81,13 +96,35 @@ function computePath(
   from: { x: number; y: number },
   to: { x: number; y: number },
 ): { x: number; y: number }[] {
+  if (ISO_MODE) return findGridPath(from, to)
   if (MAIN_WAYPOINTS.length === 0) {
     console.warn('[pathfinding] No waypoints loaded!')
     return []
   }
-  const path = findWaypointPath(from.x, from.y, to.x, to.y, MAIN_WAYPOINTS)
-  console.log(`[pathfinding] from (${from.x.toFixed(1)},${from.y.toFixed(1)}) to (${to.x.toFixed(1)},${to.y.toFixed(1)}) → ${path.length} waypoints`, path)
-  return path
+  return findWaypointPath(from.x, from.y, to.x, to.y, MAIN_WAYPOINTS,
+    FLOOR_MODE ? { jitter: 0.25, detours: false } : {})
+}
+
+// ---------------------------------------------------------------------------
+// Scranton floor seating — everyone has a home desk; desk-mates float
+// ---------------------------------------------------------------------------
+function slugForRole(role: string): string {
+  return getCharacterBaseForRole(role, ROLE_TO_CHAR[role] ?? 'employee-3')
+}
+
+/** Pick a spot for a role on the floor: their own desk if free, otherwise float somewhere sociable. */
+function assignFloorSeat(agents: Agent[], role: string): { spot: AgentSpot; home: string | null } | null {
+  const taken = new Set(agents.map(a => a.assignedSpotId).filter(Boolean))
+  const slug = slugForRole(role)
+  const home = FLOOR.seats[slug] ?? null
+  if (home && !taken.has(home)) return { spot: FLOOR_SPOTS[home] as AgentSpot, home }
+  // Desk-mate is at the desk (or no desk at all) → float
+  const free = FLOOR.floatSpots.filter(id => !taken.has(id))
+  if (free.length) return { spot: FLOOR_SPOTS[free[Math.floor(Math.random() * free.length)]] as AgentSpot, home }
+  // Floor is packed: any spare desk, then any free desk
+  const spare = FLOOR.spots.filter(s => s.type === 'desk' && !taken.has(s.id) && !(FLOOR.deskOwners[s.id]?.length))
+  const anyDesk = spare[0] ?? FLOOR.spots.find(s => s.type === 'desk' && !taken.has(s.id))
+  return anyDesk ? { spot: anyDesk as AgentSpot, home } : null
 }
 
 // Roles that go to the filing cabinet instead of their desk (browsing codebase)
@@ -167,6 +204,14 @@ const ARRIVAL_THRESHOLD = 0.3
 const MIN_VISIBLE_TIME = 30_000
 
 interface AgentMeta {
+  /** Scranton floor: this character's own desk (may be taken by a desk-mate) */
+  homeSpot?: string | null
+  /** Scranton floor: conference-room seat while a meeting is on */
+  meetingSpot?: string | null
+  /** Scranton floor: last time a floater wandered to a new spot */
+  lastWander?: number
+  /** Iso map: Michael is walking somewhere you clicked — stand there when he arrives */
+  manualWalk?: boolean
   /** Timestamp when agent spawned */
   spawnedAt: number
   /** Timestamp when agent arrived at their desk */
@@ -292,12 +337,203 @@ const App: React.FC = () => {
     [CLAUDE_ID, { spawnedAt: Date.now(), arrivedAtDeskAt: Date.now(), idleSince: null, onBreak: false, breakStartedAt: null }],
   ]))
 
+  // ---- Scranton floor: meetings, zoom, room size ----------------------------
+  const meetingActiveRef = useRef(false)
+  /** Planning calls only pull one segment (+ Michael); null = everyone on the floor */
+  const meetingRolesRef = useRef<Set<string> | null>(null)
+  const [meetingOn, setMeetingOn] = useState(false)
+  const [zoom, setZoom] = useState(1)
+  const roomRef = useRef<HTMLDivElement>(null)
+  const [roomW, setRoomW] = useState(0)
+  useEffect(() => {
+    const el = roomRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setRoomW(el.clientWidth))
+    ro.observe(el)
+    setRoomW(el.clientWidth)
+    return () => ro.disconnect()
+  }, [])
+  /** Character sprite height on the floor map scales with the map (and zoom). */
+  const floorSpriteH = Math.max(20, Math.round(roomW * FLOOR.spriteScale))
+
+  const freeMeetingSeat = (agentsNow: Agent[]): string | null => {
+    const used = new Set(agentsNow.map(a => agentMetaRef.current.get(a.id)?.meetingSpot).filter(Boolean))
+    return [...FLOOR.meetingSeats, ...FLOOR.meetingStanding].find(id => !used.has(id)) ?? null
+  }
+
+  // NB: bookkeeping (agentMetaRef) happens *outside* the setAgents updaters — React may run
+  // updaters twice in dev (StrictMode), so they must be pure.
+
+  /** Everyone on the floor walks to the conference room (Michael takes the front). */
+  const startMeeting = useCallback((reason?: string, roles?: string[] | null) => {
+    if (!FLOOR_MODE) return
+    meetingActiveRef.current = true
+    meetingRolesRef.current = roles?.length ? new Set(roles) : null
+    setMeetingOn(true)
+    const order = [...FLOOR.meetingSeats, ...FLOOR.meetingStanding]
+    const used = new Set<string>()
+    const assign = new Map<string, string>()
+    const byPriority = [...agentsRef.current].sort((a, b) => (a.id === BOSS_ID ? -1 : b.id === BOSS_ID ? 1 : 0))
+    for (const a of byPriority) {
+      if (a.state === 'completed') continue
+      if (meetingRolesRef.current && a.id !== BOSS_ID && !meetingRolesRef.current.has(a.role)) continue
+      const meta = agentMetaRef.current.get(a.id)
+      if (!meta) continue
+      const seatId = meta.meetingSpot && !used.has(meta.meetingSpot) ? meta.meetingSpot : order.find(id => !used.has(id))
+      if (!seatId) continue
+      used.add(seatId)
+      meta.meetingSpot = seatId
+      meta.onBreak = false
+      assign.set(a.id, seatId)
+    }
+    setAgents(prev => prev.map(a => {
+      const seatId = assign.get(a.id)
+      if (!seatId || a.state === 'completed') return a
+      const seat = FLOOR_SPOTS[seatId]
+      return {
+        ...a, state: 'walking-to-desk' as const,
+        targetPosition: { x: seat.x, y: seat.y }, pathQueue: computePath(a.position, seat),
+        spriteFacing: seat.spriteFacing, statusText: reason ? `📋 ${reason}` : 'to the conference room',
+      }
+    }))
+  }, [])
+
+  /** Meeting over — everyone back to their own spot. */
+  const endMeeting = useCallback(() => {
+    meetingActiveRef.current = false
+    meetingRolesRef.current = null
+    setMeetingOn(false)
+    const attendees = new Set<string>()
+    for (const [id, meta] of agentMetaRef.current) {
+      if (meta.meetingSpot) { attendees.add(id); meta.meetingSpot = null; meta.idleSince = null }
+    }
+    setAgents(prev => prev.map(a => {
+      if (!attendees.has(a.id) || a.state === 'completed') return a
+      const desk = FLOOR_SPOTS[a.assignedSpotId ?? '']
+      return {
+        ...a, state: 'walking-to-desk' as const,
+        targetPosition: { ...a.deskPosition }, pathQueue: computePath(a.position, a.deskPosition),
+        spriteFacing: desk?.spriteFacing ?? a.spriteFacing, statusText: 'back to my desk',
+      }
+    }))
+  }, [])
+
+  /** 🪑 Go to desk: everyone (but Michael — you're driving him) to their own desk.
+   *  A shared desk goes to whoever is sitting there, else its first owner (Pam before Erin);
+   *  the other sharer and the visitors find a shared space — kitchen, break room, waiting area… */
+  const goToDesks = useCallback(() => {
+    if (!FLOOR_MODE) return
+    meetingActiveRef.current = false
+    meetingRolesRef.current = null
+    setMeetingOn(false)
+    const people = agentsRef.current.filter(a => a.state !== 'completed' && a.id !== BOSS_ID)
+    const homeOf = (a: Agent) => FLOOR.seats[slugForRole(a.role)] ?? null
+    const ownerRank = (a: Agent) => {
+      const h = homeOf(a)
+      const i = h ? (FLOOR.deskOwners[h] ?? []).indexOf(slugForRole(a.role)) : -1
+      return i < 0 ? 99 : i
+    }
+    const taken = new Set<string>(['spot-1'])
+    const assign = new Map<string, { spot: string; home: boolean }>()
+    for (const a of people) {          // already sitting at your own desk → keep it
+      const h = homeOf(a)
+      if (h && a.assignedSpotId === h && !taken.has(h)) { taken.add(h); assign.set(a.id, { spot: h, home: true }) }
+    }
+    for (const a of [...people].sort((x, y) => ownerRank(x) - ownerRank(y))) {   // claim your desk if it's free
+      if (assign.has(a.id)) continue
+      const h = homeOf(a)
+      if (h && !taken.has(h)) { taken.add(h); assign.set(a.id, { spot: h, home: true }) }
+    }
+    const shared = FLOOR.floatSpots.filter(id => !taken.has(id)).sort(() => Math.random() - 0.5)
+    const spare = FLOOR.spots.filter(sp => sp.type === 'desk' && !taken.has(sp.id) && !(FLOOR.deskOwners[sp.id]?.length)).map(sp => sp.id)
+    for (const a of people) {          // desk-sharers without the desk + visitors → shared spaces
+      if (assign.has(a.id)) continue
+      const id = shared.shift() ?? spare.shift()
+      if (id) { taken.add(id); assign.set(a.id, { spot: id, home: false }) }
+    }
+    for (const [id, as] of assign) {
+      const meta = agentMetaRef.current.get(id)
+      if (!meta) continue
+      meta.meetingSpot = null
+      meta.onBreak = false
+      meta.breakStartedAt = null
+      meta.idleSince = null
+      meta.arrivedAtDeskAt = null
+      if (!as.home) meta.lastWander = Date.now()
+    }
+    setAgents(prev => prev.map(a => {
+      const as = assign.get(a.id)
+      if (!as || a.state === 'completed') return a
+      const sp = FLOOR_SPOTS[as.spot]
+      return {
+        ...a, assignedSpotId: as.spot, deskPosition: { x: sp.x, y: sp.y }, targetPosition: { x: sp.x, y: sp.y },
+        pathQueue: computePath(a.position, sp), state: 'walking-to-desk' as const, spriteFacing: sp.spriteFacing,
+        statusText: as.home ? 'back to my desk' : `desk's taken — ${roomPhrase(as.spot)}`,
+      }
+    }))
+  }, [])
+
+  // Desk-mates and floaters: take your desk back when it frees up; otherwise wander now and then.
+  useEffect(() => {
+    if (!FLOOR_MODE) return
+    const t = setInterval(() => {
+      const now = Date.now()
+      const current = agentsRef.current
+      const taken = new Set(current.map(a => a.assignedSpotId).filter(Boolean) as string[])
+      const moves = new Map<string, { spotId: string; status: string }>()
+      for (const a of current) {
+        const meta = agentMetaRef.current.get(a.id)
+        if (!meta || meta.meetingSpot || a.id === BOSS_ID || a.id === CLAUDE_ID) continue
+        if (a.state !== 'working' && a.state !== 'idle') continue
+        let move: { spotId: string; status: string } | null = null
+        if (meta.homeSpot && a.assignedSpotId !== meta.homeSpot && !taken.has(meta.homeSpot)) {
+          move = { spotId: meta.homeSpot, status: 'my turn at the desk' }
+        } else if (a.assignedSpotId && FLOOR.floatSpots.includes(a.assignedSpotId) &&
+                   now - (meta.lastWander ?? 0) > 40000 + Math.random() * 40000) {
+          const free = FLOOR.floatSpots.filter(id => !taken.has(id) && id !== a.assignedSpotId)
+          if (free.length) {
+            const id = free[Math.floor(Math.random() * free.length)]
+            move = { spotId: id, status: `wandering ${roomPhrase(id)}` }
+          }
+        }
+        if (!move) continue
+        if (a.assignedSpotId) taken.delete(a.assignedSpotId)
+        taken.add(move.spotId)
+        meta.lastWander = now
+        meta.arrivedAtDeskAt = null
+        moves.set(a.id, move)
+      }
+      if (!moves.size) return
+      setAgents(prev => prev.map(a => {
+        const m = moves.get(a.id)
+        if (!m || a.state === 'completed') return a
+        const sp = FLOOR_SPOTS[m.spotId]
+        return {
+          ...a, assignedSpotId: m.spotId, deskPosition: { x: sp.x, y: sp.y }, targetPosition: { x: sp.x, y: sp.y },
+          pathQueue: computePath(a.position, sp), state: 'walking-to-desk' as const, spriteFacing: sp.spriteFacing, statusText: m.status,
+        }
+      }))
+    }, 4000)
+    return () => clearInterval(t)
+  }, [])
+
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [deskState, setDeskState] = useState<DeskState | null>(null)
   const [chatTypingUser, setChatTypingUser] = useState<string | null>(null)
   const [lastSeenId, setLastSeenId] = useState<number | null>(null)
   const [muted, setMuted] = useState(false)
   const [dayPhase, setDayPhase] = useState<DayPhase>(getCurrentPhase())
+  // Office clock (forward-only, kept by the server): office time = now + offset
+  const [clockOffset, setClockOffset] = useState(0)
+  const clockOffsetRef = useRef(0)
+  clockOffsetRef.current = clockOffset
+  officeClockOffsetMs = clockOffset
+  useEffect(() => {
+    if (!FLOOR_MODE) return
+    fetch('http://127.0.0.1:3334/clock').then(r => r.json()).then(d => {
+      if (typeof d.offsetMs === 'number') setClockOffset(d.offsetMs)
+    }).catch(() => {})
+  }, [])
   const [dayNightMode, setDayNightMode] = useState<'auto' | 'day' | 'night'>('auto')
 
   // Compressed day cycle: 10 min = 24 hours
@@ -414,6 +650,198 @@ const App: React.FC = () => {
   // without needing to be re-created every render.
   const agentsRef = useRef<Agent[]>([])
   agentsRef.current = agents
+  ;(window as unknown as { __office?: unknown }).__office = { agentsRef } // debug handle (read-only)
+
+  // ---- Iso map: drive Michael yourself (D-pad / arrow keys / click-to-walk) ----
+  /** world-axis direction Michael is being steered in; 0,0 = not steering */
+  const manualDirRef = useRef({ du: 0, dv: 0 })
+  const manualStopRef = useRef(false)
+  const cameraRef = useRef<CameraApi>(null)
+  const onManualMove = useCallback((du: number, dv: number) => {
+    const was = manualDirRef.current.du || manualDirRef.current.dv
+    manualDirRef.current = { du, dv }
+    if (was && !du && !dv) manualStopRef.current = true
+  }, [])
+  const walkMichaelTo = useCallback((x: number, y: number) => {
+    const meta = agentMetaRef.current.get(BOSS_ID)
+    if (meta) meta.manualWalk = true
+    const w = pctToWorld(x, y)
+    // snap to the nearest spot he can actually stand on
+    let best = { u: w.u, v: w.v }
+    if (!walkable(w.u, w.v)) {
+      let bd = Infinity
+      for (let du = -3; du <= 3; du += 0.25) for (let dv = -3; dv <= 3; dv += 0.25) {
+        if (walkable(w.u + du, w.v + dv) && du * du + dv * dv < bd) { bd = du * du + dv * dv; best = { u: w.u + du, v: w.v + dv } }
+      }
+      if (bd === Infinity) return
+    }
+    const t = worldToPct(best.u, best.v)
+    setAgents(prev => prev.map(a => a.id !== BOSS_ID ? a : {
+      ...a, state: 'walking-to-desk' as const, targetPosition: t, pathQueue: computePath(a.position, t),
+    }))
+  }, [])
+  const sendMichaelHome = useCallback(() => {
+    const meta = agentMetaRef.current.get(BOSS_ID)
+    if (meta) meta.manualWalk = false
+    cameraRef.current?.follow()
+    setAgents(prev => prev.map(a => a.id !== BOSS_ID ? a : {
+      ...a, state: 'walking-to-desk' as const, targetPosition: { ...a.deskPosition },
+      pathQueue: computePath(a.position, a.deskPosition), spriteFacing: BOSS_SPOT?.spriteFacing ?? a.spriteFacing,
+    }))
+  }, [])
+  // ---- Pick up & drop Michael ----
+  const [carrying, setCarrying] = useState(false)
+  const carryFromRef = useRef<{ x: number; y: number } | null>(null)
+  const onPickMichael = useCallback((phase: 'start' | 'move' | 'drop', x: number, y: number) => {
+    // hold him by the middle: feet hang about half his height below the cursor
+    const roomEl = roomRef.current
+    const h = roomEl ? roomEl.clientHeight : 1
+    const sprite = roomEl ? roomEl.clientWidth * FLOOR.spriteScale : 80
+    const feet = { x, y: Math.min(100, y + ((sprite * 0.42) / h) * 100) }
+    const meta = agentMetaRef.current.get(BOSS_ID)
+    if (phase === 'start') {
+      const boss = agentsRef.current.find(a => a.id === BOSS_ID)
+      carryFromRef.current = boss ? { ...boss.position } : null
+      manualDirRef.current = { du: 0, dv: 0 }
+      if (meta) meta.manualWalk = false
+      setCarrying(true)
+      if (!sfx.isMuted()) sfx.playNotification?.()
+    }
+    if (phase !== 'drop') {
+      setAgents(prev => prev.map(a => a.id !== BOSS_ID ? a : {
+        ...a, position: feet, targetPosition: feet, pathQueue: [], state: 'idle' as const,
+      }))
+      return
+    }
+    // drop: onto a free seat if he's over one, else the nearest floor he can stand on
+    setCarrying(false)
+    const others = agentsRef.current.filter(a => a.id !== BOSS_ID && a.state !== 'completed')
+    const seat = seatAt(feet.x, feet.y, 0.9)
+    const seatFree = seat && !others.some(o => Math.abs(o.position.x - seat.x) < 0.4 && Math.abs(o.position.y - seat.y) < 0.6)
+    let land: { x: number; y: number } | null = seat && seatFree ? { x: seat.x, y: seat.y } : nearestWalkable(feet.x, feet.y, 3)
+    if (!land) land = carryFromRef.current          // dropped off the building — put him back
+    if (!land) return
+    const atDesk = seat?.id === 'spot-1' && !!seatFree
+    if (meta) { meta.idleSince = Date.now(); if (atDesk) meta.arrivedAtDeskAt = Date.now() }
+    const l = land
+    setAgents(prev => prev.map(a => a.id !== BOSS_ID ? a : {
+      ...a, position: l, targetPosition: l, pathQueue: [],
+      state: atDesk ? 'working' as const : 'idle' as const,
+      spriteFacing: seat && seatFree ? seat.spriteFacing : 'front-left',
+    }))
+  }, [])
+
+  // ---- Walk-up conversations: Michael stops next to someone → they greet him, chat goes to them ----
+  const [talkPartner, setTalkPartner] = useState<{ id: string; role: string; name: string; color: string } | null>(null)
+  const talkPartnerRef = useRef<typeof talkPartner>(null)
+  talkPartnerRef.current = talkPartner
+  const metAtRef = useRef(new Map<string, number>())          // agent id → last time Michael met them
+  const bossStillSinceRef = useRef<{ x: number; y: number; since: number } | null>(null)
+  /** speech bubbles over heads: agent id → text, until */
+  const [bubbles, setBubbles] = useState<Map<string, { text: string; until: number }>>(new Map())
+  const sayBubble = useCallback((agentId: string, text: string, ms = 7000) => {
+    setBubbles(prev => { const n = new Map(prev); n.set(agentId, { text, until: Date.now() + ms }); return n })
+    setTimeout(() => setBubbles(prev => {
+      const b = prev.get(agentId)
+      if (!b || b.until > Date.now()) return prev
+      const n = new Map(prev); n.delete(agentId); return n
+    }), ms + 50)
+  }, [])
+  const endTalk = useCallback(() => {
+    const p = talkPartnerRef.current
+    if (!p) return
+    setTalkPartner(null)
+    fetch('http://127.0.0.1:3334/talk/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: p.role }) }).catch(() => {})
+  }, [])
+  /** clicked someone: Michael is on his way over — don't end the chat just because he's far away yet */
+  const approachRef = useRef<{ until: number } | null>(null)
+  const talkTo = useCallback((id: string) => {
+    if (id === BOSS_ID) return
+    const all = agentsRef.current
+    const p = all.find(a => a.id === id), boss = all.find(a => a.id === BOSS_ID)
+    if (!p || !boss || p.state === 'completed') return
+    const cur = talkPartnerRef.current
+    if (cur && cur.id !== id) endTalk()
+    const pw = pctToWorld(p.position.x, p.position.y), bw = pctToWorld(boss.position.x, boss.position.y)
+    const near = Math.hypot(pw.u - bw.u, pw.v - bw.v) < 2.2
+    metAtRef.current.set(id, Date.now())
+    if (!cur || cur.id !== id) {
+      const cfg = AGENT_CONFIGS[p.role] ?? AGENT_CONFIGS['default']
+      const name = EMPLOYEE_BY_ROLE[p.role]?.name ?? themedDisplayName(p.role, p.name)
+      setTalkPartner({ id: p.id, role: p.role, name, color: cfg.color })
+      fetch('http://127.0.0.1:3334/talk/encounter', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: p.role, place: p.assignedSpotId ? roomPhrase(p.assignedSpotId) : undefined }),
+      }).catch(() => {})
+    }
+    if (near) return
+    // stand next to them, on the side Michael is coming from
+    let best: { u: number; v: number } | null = null, bd = Infinity
+    for (let k = 0; k < 16; k++) {
+      const ang = (k / 16) * Math.PI * 2
+      for (const r of [1.0, 1.4, 1.8]) {
+        const u = pw.u + r * Math.cos(ang), v = pw.v + r * Math.sin(ang)
+        if (!walkable(u, v)) continue
+        const d = Math.hypot(u - bw.u, v - bw.v) + r * 3
+        if (d < bd) { bd = d; best = { u, v } }
+      }
+    }
+    if (!best) return
+    approachRef.current = { until: Date.now() + 2500 }
+    const t = worldToPct(best.u, best.v)
+    walkMichaelTo(t.x, t.y)
+  }, [endTalk, walkMichaelTo])
+
+  useEffect(() => {
+    if (!ISO_MODE) return
+    const t = setInterval(() => {
+      const all = agentsRef.current
+      const boss = all.find(a => a.id === BOSS_ID)
+      if (!boss) return
+      const bw = pctToWorld(boss.position.x, boss.position.y)
+      const bossRoom = roomAt(boss.position.x, boss.position.y)
+      const now = Date.now()
+      // has Michael stopped? (passing by doesn't count — he has to stop next to you)
+      const st = bossStillSinceRef.current
+      if (!st || Math.abs(st.x - boss.position.x) > 0.05 || Math.abs(st.y - boss.position.y) > 0.05) {
+        bossStillSinceRef.current = { x: boss.position.x, y: boss.position.y, since: now }
+      }
+      const still = now - (bossStillSinceRef.current?.since ?? now) > 600 && boss.state !== 'walking-to-desk'
+      const dist = (a: Agent) => { const w = pctToWorld(a.position.x, a.position.y); return Math.hypot(w.u - bw.u, w.v - bw.v) }
+      // walked away → conversation over
+      const partner = talkPartnerRef.current
+      if (partner && approachRef.current) {
+        if (boss.state === 'walking-to-desk' || now < approachRef.current.until) return   // still walking over
+        approachRef.current = null
+      }
+      if (partner) {
+        const p = all.find(a => a.id === partner.id)
+        if (!p || p.state === 'completed' || dist(p) > 4.5 || roomAt(p.position.x, p.position.y) !== bossRoom) endTalk()
+        return
+      }
+      if (!still || meetingActiveRef.current) return   // no walk-up chit-chat in the middle of a meeting
+      let best: Agent | null = null, bd = 2.1
+      for (const a of all) {
+        if (a.id === BOSS_ID || a.state === 'completed' || a.state === 'walking-to-desk' || a.state === 'new-hire') continue
+        if (roomAt(a.position.x, a.position.y) !== bossRoom) continue
+        const d = dist(a)
+        if (d < bd && now - (metAtRef.current.get(a.id) ?? 0) > 90_000) { bd = d; best = a }
+      }
+      if (!best) return
+      metAtRef.current.set(best.id, now)
+      const cfg = AGENT_CONFIGS[best.role] ?? AGENT_CONFIGS['default']
+      const name = EMPLOYEE_BY_ROLE[best.role]?.name ?? themedDisplayName(best.role, best.name)
+      setTalkPartner({ id: best.id, role: best.role, name, color: cfg.color })
+      const place = best.assignedSpotId ? roomPhrase(best.assignedSpotId) : undefined
+      fetch('http://127.0.0.1:3334/talk/encounter', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: best.role, place }),
+      }).catch(() => {})
+    }, 400)
+    return () => clearInterval(t)
+  }, [endTalk])
+
+  const getPeople = useCallback(() => agentsRef.current
+    .map(a => ({ id: a.id, x: a.position.x, y: a.position.y, color: a.color, boss: a.id === BOSS_ID })), [])
 
   // Pending side-effects: computed during state updater, flushed in useEffect
   const pendingEffectsRef = useRef<PendingEffect[]>([])
@@ -430,6 +858,36 @@ const App: React.FC = () => {
   // Slack chat helpers
   // ---------------------------------------------------------------------------
 
+  // ---- Who's talking to whom (for the iso map: people turn to face each other) ----
+  /** agent id → the agent they're talking with, until when */
+  const convoRef = useRef(new Map<string, { with: string; until: number }>())
+  const recentSpeakersRef = useRef<{ id: string; at: number }[]>([])
+  const [gazeTick, setGazeTick] = useState(0)
+  /** per person: glancing at Michael until, and when they might glance next */
+  const glanceRef = useRef(new Map<string, { until: number; next: number }>())
+  const noteSpeaker = (sender: string, role: string) => {
+    if (!ISO_MODE) return
+    const all = agentsRef.current
+    const a = role === BOSS_ROLE ? all.find(x => x.id === BOSS_ID)
+      : all.find(x => x.role === role) ?? all.find(x => x.name === sender)
+    if (!a) return
+    const now = Date.now()
+    const recent = recentSpeakersRef.current.filter(r => now - r.at < 25000 && r.id !== a.id)
+    const partner = recent[recent.length - 1]
+    if (partner) {
+      convoRef.current.set(a.id, { with: partner.id, until: now + 20000 })
+      convoRef.current.set(partner.id, { with: a.id, until: now + 20000 })
+      setGazeTick(t => t + 1)
+    }
+    recentSpeakersRef.current = [...recent.slice(-6), { id: a.id, at: now }]
+  }
+  // conversations expire → re-evaluate who's looking where every couple of seconds
+  useEffect(() => {
+    if (!ISO_MODE) return
+    const t = setInterval(() => setGazeTick(x => x + 1), 1000)
+    return () => clearInterval(t)
+  }, [])
+
   const addMsg = useCallback((
     sender: string,
     role: string,
@@ -437,6 +895,7 @@ const App: React.FC = () => {
     text: string,
     isSystem = false,
   ) => {
+    if (!isSystem) noteSpeaker(sender, role)
     setMessages(prev => [...prev.slice(-50), {
       id: makeMsgId(),
       sender,
@@ -528,6 +987,14 @@ const App: React.FC = () => {
     let lastPhase: DayPhase | null = null
 
     const tick = () => {
+      if (FLOOR_MODE) {
+        // Scranton floor: the light follows the office clock (real time + however far you've skipped ahead)
+        const d = new Date(Date.now() + clockOffsetRef.current)
+        setNightOpacity(nightAt(d))
+        const ph = phaseAt(d)
+        if (ph !== lastPhase) { lastPhase = ph; setDayPhase(ph) }
+        return
+      }
       const elapsed = (Date.now() - startTime) % CYCLE_MS
       const t = elapsed / 1000 // seconds into cycle
 
@@ -575,6 +1042,41 @@ const App: React.FC = () => {
       setDeskState(event as unknown as DeskState)
       return
     }
+    if (event.type === 'meeting_start') {
+      const ev = event as { reason?: string; roles?: string[] | null }
+      startMeeting(ev.reason, ev.roles)
+      return
+    }
+    if (event.type === 'meeting_end') {
+      endMeeting()
+      return
+    }
+    if (event.type === 'chat_message' && (event as unknown as { talk?: boolean }).talk) {
+      const role = (event as unknown as { role?: string }).role
+      const a = agentsRef.current.find(x => x.role === role)
+      if (a && event.text) sayBubble(a.id, event.text)
+    }
+    if ((event.type as string) === 'market_bell') {
+      if (!sfx.isMuted()) sfx.playBell()
+      return
+    }
+    if ((event.type as string) === 'clock_update') {
+      const ev = event as unknown as { offsetMs: number; now: number; jumpedMs?: number }
+      setClockOffset(prev => Math.max(prev, ev.offsetMs))   // never back
+      if (ev.jumpedMs && ev.jumpedMs > 0) {
+        const h = ev.jumpedMs / 3600000
+        const span = h >= 48 ? `${Math.round(h / 24)} days` : h >= 1 ? `${Math.round(h * 10) / 10}h` : `${Math.round(h * 60)} min`
+        const d = new Date(ev.now)
+        const when = d.toLocaleString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) + ', ' +
+          d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+        setTimeout(() => addMsg('system', 'default', '#888', `⏩ Office clock jumped ahead ${span} — it's now ${when}.`, true), 0)
+      }
+      return
+    }
+    if ((event.type as string) === 'go_to_desks') {
+      goToDesks()
+      return
+    }
     const effects: PendingEffect[] = []
 
     setAgents(prev => {
@@ -595,7 +1097,12 @@ const App: React.FC = () => {
           const filingTaken = isFiler && FILING_SPOT !== null && prev.some(a => a.assignedSpotId === FILING_SPOT.id)
 
           let spot
-          if (isFiler && !filingTaken && FILING_SPOT !== null) {
+          let homeSpot: string | null = null
+          if (FLOOR_MODE) {
+            const seat = assignFloorSeat(prev, role)
+            spot = seat?.spot ?? null
+            homeSpot = seat?.home ?? null
+          } else if (isFiler && !filingTaken && FILING_SPOT !== null) {
             spot = FILING_SPOT
           } else {
             spot = assignSpot(prev, MAIN_ROOM.agentSpots)
@@ -608,19 +1115,35 @@ const App: React.FC = () => {
           }
 
           const agentBase = createAgent({ id, name, role, task, spot })
-          const agent = {
+          let agent: Agent = {
             ...agentBase,
             pathQueue: computePath(agentBase.position, agentBase.targetPosition),
           }
+          if (FLOOR_MODE && homeSpot && spot.id !== homeSpot) {
+            agent.statusText = `desk's taken — hanging out ${roomPhrase(spot.id)}`
+          }
 
           // Initialise runtime meta
-          agentMetaRef.current.set(id, {
+          const newMeta: AgentMeta = {
             spawnedAt: Date.now(),
             arrivedAtDeskAt: null,
             idleSince: null,
             onBreak: false,
             breakStartedAt: null,
-          })
+            homeSpot,
+            lastWander: Date.now(),
+          }
+          // A meeting is on → walk straight into the conference room
+          if (FLOOR_MODE && meetingActiveRef.current && (!meetingRolesRef.current || meetingRolesRef.current.has(role))) {
+            const seatId = freeMeetingSeat(prev)
+            if (seatId) {
+              const ms = FLOOR_SPOTS[seatId]
+              newMeta.meetingSpot = seatId
+              agent = { ...agent, targetPosition: { x: ms.x, y: ms.y }, pathQueue: computePath(agent.position, ms),
+                spriteFacing: ms.spriteFacing, statusText: 'heading into the meeting' }
+            }
+          }
+          agentMetaRef.current.set(id, newMeta)
 
           const cfg = AGENT_CONFIGS[role] ?? AGENT_CONFIGS['default']
           effects.push({
@@ -1385,7 +1908,34 @@ const App: React.FC = () => {
         }
         agentMetaRef.current.set(agent.id, meta)
 
-        const speed = WALK_SPEED * dt
+        const speed = WALK_SPEED * dt * FLOOR_SPEED
+
+        if (ISO_MODE && agent.id === BOSS_ID) {
+          const md = manualDirRef.current
+          if (md.du || md.dv) {
+            // steer with collisions: slide along walls and desks instead of stopping dead
+            const w = pctToWorld(agent.position.x, agent.position.y)
+            const step = 0.075 * dt
+            let nu = w.u + md.du * step, nv = w.v + md.dv * step
+            if (!walkable(nu, nv)) {
+              if (md.du && walkable(nu, w.v)) nv = w.v
+              else if (md.dv && walkable(w.u, nv)) nu = w.u
+              else { nu = w.u; nv = w.v }
+            }
+            meta.manualWalk = false
+            const pos = worldToPct(nu, nv)
+            const sx = md.du + md.dv, sy = md.dv - md.du
+            const facing = (sy >= 0 ? (sx >= 0 ? 'front-left' : 'front-right') : (sx >= 0 ? 'rear-right' : 'rear-left')) as Agent['spriteFacing']
+            changed = true
+            return { ...agent, position: pos, targetPosition: pos, pathQueue: [], state: 'walking-to-desk' as const, spriteFacing: facing }
+          }
+          if (manualStopRef.current) {
+            manualStopRef.current = false
+            meta.idleSince = nowMs
+            changed = true
+            return { ...agent, targetPosition: { ...agent.position }, pathQueue: [], state: 'idle' as const }
+          }
+        }
 
         // Walk toward the first waypoint in the queue, or directly to the
         // final targetPosition if the queue is empty.
@@ -1431,7 +1981,19 @@ const App: React.FC = () => {
             )
 
             if (agent.state === 'new-hire' || agent.state === 'walking-to-desk') {
-              if (isAtDesk || agent.state === 'new-hire') {
+              if (meta.meetingSpot && !isAtDesk) {
+                // Sat down in the conference room — sit tight until the meeting ends
+                meta.idleSince = nowMs
+                updated = { ...agent, position, state: 'idle', statusText: agent.statusText }
+                changed = true
+              } else if (meta.manualWalk && !isAtDesk) {
+                // Michael got where you clicked — he waits there
+                meta.manualWalk = false
+                meta.idleSince = nowMs
+                updated = { ...agent, position, state: 'idle' }
+                changed = true
+              } else if (isAtDesk || agent.state === 'new-hire') {
+                meta.manualWalk = false
                 meta.arrivedAtDeskAt = nowMs
                 meta.onBreak = false
                 // Open filing cabinet if this agent's desk is the filing spot
@@ -1508,6 +2070,7 @@ const App: React.FC = () => {
           updated.state === 'working' &&
           meta.arrivedAtDeskAt !== null &&
           !meta.onBreak &&
+          !meta.meetingSpot &&
           COFFEE_SPOT !== null
         ) {
           const deskTime = nowMs - meta.arrivedAtDeskAt
@@ -1562,7 +2125,10 @@ const App: React.FC = () => {
       })
 
       if (changed || pruned.length !== next.length) {
-        setAgents(pruned)
+        // Why: only apply this frame if nobody else updated agents since we read them —
+        // otherwise a queued update (meeting start/end, new hire, floater move) would be clobbered.
+        // Skipping one frame is invisible; the next tick recomputes from fresh state.
+        setAgents(current => (current === prev ? pruned : current))
       }
 
       rafId = requestAnimationFrame(tick)
@@ -1579,13 +2145,17 @@ const App: React.FC = () => {
 
   useEffect(() => {
     // Percentage-based target positions for each event type (matching room layout)
-    const EVENT_TARGETS: Record<string, { x: number; y: number }> = {
+    const EVENT_TARGETS: Record<string, { x: number; y: number }> = FLOOR_MODE ? FLOOR.eventTargets : {
       'fire-drill': { x: 67.5, y: 48.9 },
       'pizza':      { x: 67.5, y: 48.9 },
       'standup':    { x: 28.9, y: 66.0 },
       'birthday':   { x: 73.5, y: 56.7 },
       'printer-jam': { x: 83.8, y: 63 },
     }
+    // Why: on the floor map a crowd shouldn't stack on one pixel
+    const spread = (t: { x: number; y: number }) => FLOOR_MODE
+      ? { x: t.x + (Math.random() - 0.5) * 6, y: t.y + (Math.random() - 0.5) * 5 }
+      : { ...t }
 
     const bossCfg = AGENT_CONFIGS[BOSS_ROLE] ?? AGENT_CONFIGS['default']
 
@@ -1635,16 +2205,20 @@ const App: React.FC = () => {
 
       // Handle event types
       if (event.type === 'all-move') {
-        const target = EVENT_TARGETS[event.id] ?? { x: 67.5, y: 48.9 }
+        const target = EVENT_TARGETS[event.id] ?? (FLOOR_MODE ? FLOOR.entryPoint : { x: 67.5, y: 48.9 })
+        if (FLOOR_MODE && meetingActiveRef.current) return // nobody leaves a meeting for pretzels. (they would.)
 
         // Move all agents (including boss) to target
-        setAgents(prev => prev.map(a => ({
-          ...a,
-          state: 'walking-to-desk' as const,
-          targetPosition: { ...target },
-          statusText: event.name,
-          pathQueue: computePath(a.position, target),
-        })))
+        setAgents(prev => prev.map(a => {
+          const t = spread(target)
+          return {
+            ...a,
+            state: 'walking-to-desk' as const,
+            targetPosition: t,
+            statusText: event.name,
+            pathQueue: computePath(a.position, t),
+          }
+        }))
 
         // After duration, send agents back to their desks
         setTimeout(() => {
@@ -1658,7 +2232,8 @@ const App: React.FC = () => {
         }, event.duration)
 
       } else if (event.type === 'single-agent') {
-        const target = EVENT_TARGETS[event.id] ?? { x: 83.8, y: 63 }
+        const target = EVENT_TARGETS[event.id] ?? (FLOOR_MODE ? FLOOR.eventTargets['printer-jam'] : { x: 83.8, y: 63 })
+        if (FLOOR_MODE && meetingActiveRef.current) return
         // Pick a random non-boss working agent
         const workers = agentsRef.current.filter(a => a.id !== BOSS_ID && (a.state === 'working' || a.state === 'walking-to-desk'))
         if (workers.length > 0) {
@@ -1783,6 +2358,60 @@ const App: React.FC = () => {
     setMuted(v === 0)
   }, [])
 
+  // Who is sitting (iso map): settled at a spot with a chair, couch or stool
+  const seated = useMemo(() => {
+    const out = new Set<string>()
+    if (!ISO_MODE) return out
+    for (const a of agents) {
+      if (a.state === 'walking-to-desk' || a.state === 'new-hire' || a.state === 'completed' || a.state === 'coffee-break') continue
+      if (seatAt(a.position.x, a.position.y, 0.3)) out.add(a.id)
+    }
+    return out
+  }, [agents])
+
+  // Where everyone is looking (iso map): Michael if he's in the room with you, otherwise
+  // whoever you're talking with (if they're nearby), otherwise your screen / your spot's facing.
+  const gaze = useMemo(() => {
+    const out = new Map<string, Agent['spriteFacing']>()
+    if (!ISO_MODE) return out
+    void gazeTick
+    const now = Date.now()
+    const boss = agents.find(a => a.id === BOSS_ID)
+    const bossRoom = boss ? roomAt(boss.position.x, boss.position.y) : null
+    const byId = new Map(agents.map(a => [a.id, a]))
+    for (const a of agents) {
+      if (a.state === 'walking-to-desk' || a.state === 'new-hire' || a.state === 'completed') continue
+      const room = roomAt(a.position.x, a.position.y)
+      let target: Agent | undefined
+      const partner = talkPartnerRef.current
+      if (partner && boss && a.id === partner.id) target = boss                 // talking with Michael: face him
+      else if (partner && a.id === BOSS_ID) target = byId.get(partner.id)        // …and he faces them
+      else if (boss && a.id !== BOSS_ID && room && room === bossRoom) {
+        // same room as Michael: people glance up now and then, then get back to their screens
+        const g = glanceRef.current.get(a.id) ?? { until: 0, next: now + 800 + Math.random() * 4000 }
+        if (now >= g.until && now >= g.next) {
+          if (Math.random() < 0.3) { g.until = now + 2000 + Math.random() * 2500; g.next = g.until + 7000 + Math.random() * 12000 }
+          else g.next = now + 4000 + Math.random() * 8000
+        }
+        glanceRef.current.set(a.id, g)
+        if (now < g.until) target = boss
+      } else glanceRef.current.delete(a.id)                                       // Michael left: eyes back on the screen
+      if (!target) {
+        const c = convoRef.current.get(a.id)
+        const p = c && c.until > now ? byId.get(c.with) : undefined
+        if (p && p.state !== 'completed') {
+          const wa = pctToWorld(a.position.x, a.position.y), wp = pctToWorld(p.position.x, p.position.y)
+          if (roomAt(p.position.x, p.position.y) === room || Math.hypot(wa.u - wp.u, wa.v - wp.v) < 10) target = p
+        }
+      }
+      if (target) {
+        const dx = target.position.x - a.position.x, dy = target.position.y - a.position.y
+        if (Math.abs(dx) + Math.abs(dy) > 0.05) out.set(a.id, facingToward(dx, dy))
+      }
+    }
+    return out
+  }, [agents, gazeTick, talkPartner])
+
   // ---------------------------------------------------------------------------
   // Render — helper mode renders PlacementHelper in place of the full app
   // ---------------------------------------------------------------------------
@@ -1795,56 +2424,58 @@ const App: React.FC = () => {
     )
   }
 
-  return (
-    <div className="app-wrapper">
-      <div className="title-bar">
-        <div className="title-bar-dot" style={{ background: '#ff5f57' }} />
-        <div className="title-bar-dot" style={{ background: '#febc2e' }} />
-        <div className="title-bar-dot" style={{ background: '#28c840' }} />
-        <span className="title-bar-text">{theme === 'office' ? `${FIRM.name.toUpperCase()} — TRADING FLOOR` : 'CLAUDE CODE — AGENT OFFICE'}</span>
-        <button
-          className="title-bar-daynight"
-          onClick={() => setDayNightMode(prev =>
-            prev === 'auto' ? 'day' : prev === 'day' ? 'night' : 'auto'
-          )}
-          title={`Mode: ${dayNightMode}`}
-        >
-          {dayNightMode === 'auto' ? 'AUTO' : dayNightMode === 'day' ? 'DAY' : 'NIGHT'}
-        </button>
-        <span className="title-bar-phase">{getPhaseLabel(effectivePhase)}</span>
-      </div>
+  // Night art for the iso atlas (base layers cross-fade; sprites swap once it's dark)
+  const isNightArt = dayNightMode === 'night' || (dayNightMode === 'auto' && nightOpacity > 0.5)
 
-      <div className="app-body">
-      <div className="office-view">
-        <div
-          className={`room-container${flickering ? ' flickering' : ''}`}
-          style={{
-            aspectRatio: '4800/3584',
-            width: '100%',
-            maxHeight: '100%',
-            position: 'relative',
-          }}
-        >
+  const roomContent = (
+        <>
           {/* Room backgrounds — both rendered, night crossfades via opacity. Theme swaps source art. */}
           <div
             key={`day-${theme}`}
             className="room-background"
-            style={{ backgroundImage: `url(${getRoomImage('day')})` }}
+            style={{ backgroundImage: `url(${FLOOR_MODE ? FLOOR.background.day : getRoomImage('day')})`,
+              ...(FLOOR_MODE && FLOOR.pixelArt ? { imageRendering: 'pixelated' as const } : {}) }}
           />
           <div
             key={`night-${theme}`}
             className="room-background room-background-night"
             style={{
-              backgroundImage: `url(${getRoomImage('night')})`,
+              backgroundImage: `url(${FLOOR_MODE ? FLOOR.background.night : getRoomImage('night')})`,
+              ...(FLOOR_MODE && FLOOR.pixelArt ? { imageRendering: 'pixelated' as const } : {}),
               opacity: dayNightMode === 'auto' ? nightOpacity : dayNightMode === 'night' ? 1 : 0,
             }}
           />
 
           {/* Trading floor ticker tape — the desk's latest book scrolls across the top */}
-          {theme === 'office' && !isHelperMode && <TickerTape desk={deskState} />}
+          {theme === 'office' && !isHelperMode && !ISO_MODE && <TickerTape desk={deskState} />}
+
+          {/* Scranton floor: every desk/chair/wall is its own sprite so people pass behind and in front of it */}
+          {ISO_MODE && FLOOR.atlas && FLOOR.furniture.map((f, i) => {
+            const at = FLOOR.atlas!
+            const aw = f.aw ?? 1, ah = f.ah ?? 1
+            return (
+              <div key={i} className="iso-obj" style={{
+                left: `${f.left}%`, top: `${f.top}%`, width: `${f.width}%`, height: `${f.height}%`, zIndex: f.z,
+                backgroundImage: `url(${isNightArt ? at.night : at.day})`,
+                backgroundSize: `${(at.width / aw) * 100}% ${(at.height / ah) * 100}%`,
+                backgroundPosition: `${aw >= at.width ? 0 : ((f.ax ?? 0) / (at.width - aw)) * 100}% ${ah >= at.height ? 0 : ((f.ay ?? 0) / (at.height - ah)) * 100}%`,
+              }} />
+            )
+          })}
+          {FLOOR_MODE && !ISO_MODE && FLOOR.furniture.map((f, i) => (
+            <img key={i} src={f.sprite} alt="" draggable={false} className="floor-sprite"
+              style={{ left: `${f.left}%`, top: `${f.top}%`, width: `${f.width}%`, zIndex: f.z,
+                filter: nightOpacity > 0.5 && dayNightMode !== 'day' ? 'brightness(0.8)' : undefined }} />
+          ))}
+          {FLOOR_MODE && (!ISO_MODE || roomW / FLOOR.size.width < 0.62) && FLOOR.labels.map(l => (
+            <div key={l.id} className="floor-label" style={{ left: `${l.x}%`, top: `${l.y}%` }}>
+              <span className="floor-label-name">{l.name}</span>
+              {l.sub && zoom > 1 && <span className="floor-label-sub">{l.sub}</span>}
+            </div>
+          ))}
 
           {/* Furniture — apply interactive state overrides */}
-          <FurnitureRenderer onItemClick={handleFurnitureClick} items={MAIN_ROOM.furniture.map(item => {
+          {!FLOOR_MODE && <FurnitureRenderer onItemClick={handleFurnitureClick} items={MAIN_ROOM.furniture.map(item => {
             const stateOverride = furnitureStates[item.id]
             if (!stateOverride) return item
             // Swap sprite based on state
@@ -1858,7 +2489,7 @@ const App: React.FC = () => {
               return { ...item, sprite: 'printer-broken' }
             }
             return item
-          })} />
+          })} />}
 
           {/* Agents */}
           {agents.map(agent => {
@@ -1866,7 +2497,12 @@ const App: React.FC = () => {
             const spot = MAIN_ROOM.agentSpots.find(s => s.id === agent.assignedSpotId)
             const atDesk = Math.abs(agent.position.x - agent.deskPosition.x) < 1 &&
                            Math.abs(agent.position.y - agent.deskPosition.y) < 1
-            const zOverride = atDesk && spot?.zIndex ? spot.zIndex : undefined
+            // Floor map: avatars are always the top layer (sorted front-to-back among themselves)
+            const zOverride = ISO_MODE
+              ? (carrying && agent.id === BOSS_ID ? 9400 : 1000 + Math.round((agent.position.y + (FLOOR.iso?.personBias ?? 0)) * 50))
+              : FLOOR_MODE
+              ? 1000 + Math.round(agent.position.y * 10)
+              : (atDesk && spot?.zIndex ? spot.zIndex : undefined)
 
             const meta = agentMetaRef.current.get(agent.id)
             const idleDurationMs =
@@ -1881,7 +2517,50 @@ const App: React.FC = () => {
                 idleDurationMs={idleDurationMs}
                 zIndex={zOverride}
                 isTyping={typingAgents.has(agent.id)}
+                spriteHeight={FLOOR_MODE ? floorSpriteH : undefined}
+                isoFacing={ISO_MODE}
+                facingOverride={gaze.get(agent.id)}
+                sitting={ISO_MODE && seated.has(agent.id)}
+                pickable={ISO_MODE && agent.id === BOSS_ID}
+                clickable={ISO_MODE && agent.id !== BOSS_ID && agent.state !== 'completed'}
+                carried={ISO_MODE && agent.id === BOSS_ID && carrying}
               />
+            )
+          })}
+
+          {/* Conversation bubbles — over everyone's heads, on the top layer */}
+          {ISO_MODE && [...bubbles.entries()].map(([id, b]) => {
+            const a = agents.find(x => x.id === id)
+            if (!a || b.until < Date.now()) return null
+            const roomH = roomRef.current?.clientHeight || 1
+            const head = (floorSpriteH * (seated.has(id) ? 0.86 : 1.12)) / roomH * 100
+            // Michael and whoever he's talking to: bubbles lean apart so they don't overlap
+            const pair = talkPartner && (id === BOSS_ID || id === talkPartner.id)
+              ? agents.find(x => x.id === (id === BOSS_ID ? talkPartner.id : BOSS_ID)) : undefined
+            const side = pair ? (a.position.x <= pair.position.x ? ' side-left' : ' side-right') : ''
+            return (
+              <div key={`bub-${id}`} className={`talk-anchor${side}`}
+                style={{ left: `${a.position.x}%`, top: `${a.position.y - head}%`, zIndex: 9200 }}>
+                <div key={b.text} className={`talk-bubble${id === BOSS_ID ? ' michael' : ''}`}>{b.text}</div>
+              </div>
+            )
+          })}
+
+          {/* Nameplates — their own top layer so desks and walls never hide them */}
+          {ISO_MODE && roomW / FLOOR.size.width >= 0.6 && agents.map(agent => {
+            if (agent.state === 'completed' && !agentMetaRef.current.get(agent.id)) return null
+            // packed meeting: only the person speaking keeps a nameplate, so the room stays readable
+            if (meetingOn && agentMetaRef.current.get(agent.id)?.meetingSpot && !bubbles.has(agent.id)) return null
+            const emp = EMPLOYEE_BY_ROLE[agent.role]
+            const name = emp?.name ?? themedDisplayName(agent.role, agent.name)
+            const showTitle = roomW / FLOOR.size.width >= 1.05 && emp?.title
+            const lifted = carrying && agent.id === BOSS_ID
+            return (
+              <div key={`np-${agent.id}`} className={`char-nameplate${lifted ? ' lifted' : ''}${talkPartner?.id === agent.id ? ' talking' : ''}`}
+                style={{ left: `${agent.position.x}%`, top: `${agent.position.y}%`, borderColor: agent.color, zIndex: 9100 }}>
+                <span className="char-nameplate-name">{name}</span>
+                {showTitle && <span className="char-nameplate-title">{emp!.title}</span>}
+              </div>
             )
           })}
 
@@ -1898,13 +2577,14 @@ const App: React.FC = () => {
                 className="angela-cat"
                 style={{
                   position: 'absolute',
-                  left: `${host.position.x + 2.2}%`,
+                  left: `${host.position.x + (ISO_MODE ? 0.9 : 2.2)}%`,
                   top: `${host.position.y}%`,
                   // Why: cats are 30-40% of ~78px character = ~24-30px tall
-                  height: 28,
+                  height: FLOOR_MODE ? Math.round(floorSpriteH * 0.34) : 28,
                   width: 'auto',
                   transform: 'translate(-50%, -10%)',
-                  zIndex: Math.round(host.position.y) + 1,
+                  zIndex: ISO_MODE ? 1001 + Math.round((host.position.y + (FLOOR.iso?.personBias ?? 0)) * 50)
+                    : FLOOR_MODE ? 1001 + Math.round(host.position.y * 10) : Math.round(host.position.y) + 1,
                   pointerEvents: 'none',
                   filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.4))',
                 }}
@@ -1923,9 +2603,9 @@ const App: React.FC = () => {
                 style={{
                   position: 'absolute',
                   left: `${boss.position.x}%`,
-                  top: `${boss.position.y - 8}%`,
+                  top: `${boss.position.y - (ISO_MODE ? 4 : 8)}%`,
                   transform: 'translate(-50%, -100%)',
-                  zIndex: 999,
+                  zIndex: ISO_MODE ? 9600 : 999,
                   pointerEvents: 'none',
                 }}
               >
@@ -1939,8 +2619,77 @@ const App: React.FC = () => {
           })()}
 
           {/* Day/night overlay */}
-          <div className={`day-overlay ${effectivePhase}`} />
+          <div className={`day-overlay ${effectivePhase}`} style={ISO_MODE ? { zIndex: 9500 } : FLOOR_MODE ? { zIndex: 2300 } : undefined} />
+        </>
+  )
+
+  return (
+    <div className="app-wrapper">
+      <div className="title-bar">
+        <div className="title-bar-dot" style={{ background: '#ff5f57' }} />
+        <div className="title-bar-dot" style={{ background: '#febc2e' }} />
+        <div className="title-bar-dot" style={{ background: '#28c840' }} />
+        <span className="title-bar-text">{theme === 'office' ? `${FIRM.name.toUpperCase()} — TRADING FLOOR` : 'CLAUDE CODE — AGENT OFFICE'}</span>
+        <button
+          className="title-bar-daynight"
+          onClick={() => setDayNightMode(prev =>
+            prev === 'auto' ? 'day' : prev === 'day' ? 'night' : 'auto'
+          )}
+          title={`Mode: ${dayNightMode}`}
+        >
+          {dayNightMode === 'auto' ? 'AUTO' : dayNightMode === 'day' ? 'DAY' : 'NIGHT'}
+        </button>
+        {FLOOR_MODE && <OfficeClock offsetMs={clockOffset} />}
+        <span className="title-bar-phase">{getPhaseLabel(effectivePhase)}</span>
+      </div>
+
+      <div className="app-body">
+      <div className={`office-view${FLOOR_MODE ? ' floor-mode' : ''}${ISO_MODE ? ' iso-mode' : ''}${FLOOR_MODE && !ISO_MODE && zoom > 1 ? ' zoomed' : ''}`}>
+        {/* Office phone — call any employee onto the floor */}
+        {!isHelperMode && <StaffPhone meetingOn={meetingOn} />}
+        {FLOOR_MODE && !ISO_MODE && (
+          <div className="floor-zoom" role="group" aria-label="Zoom">
+            <button onClick={() => setZoom(z => Math.max(1, z - 0.5))} disabled={zoom <= 1} title="Zoom out">−</button>
+            <span>{Math.round(zoom * 100)}%</span>
+            <button onClick={() => setZoom(z => Math.min(3, z + 0.5))} disabled={zoom >= 3} title="Zoom in">+</button>
+          </div>
+        )}
+        {ISO_MODE && theme === 'office' && !isHelperMode && <TickerTape desk={deskState} />}
+        {ISO_MODE ? (
+          <FloorCamera
+            ref={cameraRef}
+            mapW={FLOOR.size.width}
+            mapH={FLOOR.size.height}
+            worldRef={roomRef}
+            worldClassName={`room-container${flickering ? ' flickering' : ''}`}
+            minimap={FLOOR.minimap}
+            labels={FLOOR.labels}
+            getPeople={getPeople}
+            onMove={onManualMove}
+            onWalkTo={walkMichaelTo}
+            onHome={sendMichaelHome}
+            onPick={onPickMichael}
+            onPersonClick={talkTo}
+          >
+            {roomContent}
+          </FloorCamera>
+        ) : (
+        <div className="floor-scroll">
+        <div
+          ref={roomRef}
+          className={`room-container${flickering ? ' flickering' : ''}`}
+          style={{
+            aspectRatio: FLOOR_MODE ? `${FLOOR.size.width}/${FLOOR.size.height}` : '4800/3584',
+            width: FLOOR_MODE ? `${zoom * 100}%` : '100%',
+            maxHeight: FLOOR_MODE && zoom > 1 ? 'none' : '100%',
+            flex: 'none',
+            position: 'relative',
+          }}
+        >
+          {roomContent}
         </div>
+        </div>
+        )}
       </div>
 
       <SlackChat
@@ -1953,16 +2702,21 @@ const App: React.FC = () => {
           const bossCfg = AGENT_CONFIGS[BOSS_ROLE] ?? AGENT_CONFIGS['default']
           addMsg(bossCfg.title, BOSS_ROLE, bossCfg.color, text)
           setAutoTypeText(undefined)
+          // Talking to someone on the floor? Say it out loud and send it to them.
+          const to = ISO_MODE && !text.startsWith('/') ? talkPartnerRef.current?.role : undefined
+          if (to) sayBubble(BOSS_ID, text, 6000)
           // Send to server so Claude can read it
           fetch('http://127.0.0.1:3334/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sender: bossCfg.title, text }),
+            body: JSON.stringify({ sender: bossCfg.title, text, boss: true, ...(to ? { to } : {}) }),
           }).catch(() => {})
         }}
         autoTypeText={autoTypeText}
         dayPhase={effectivePhase}
         typingUser={chatTypingUser}
+        talkingTo={ISO_MODE ? talkPartner : null}
+        onEndTalk={endTalk}
         lastSeenId={lastSeenId}
         onReaction={(messageId, reactions) => {
           setMessages(prev => prev.map(m =>

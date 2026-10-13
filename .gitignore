@@ -19,3 +19,6 @@ graphify-out/graph.html
 
 # Dunder Mifflin Capital desk output (client reports)
 reports/
+
+# API keys (Alpha Vantage etc.) — never commit
+firm/desk.secrets.json

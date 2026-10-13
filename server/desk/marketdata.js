@@ -7,6 +7,7 @@
  */
 
 import { yahooSymbol } from './classify.js'
+import { avKey, avDaily } from './alphavantage.js'
 
 const UA = 'Mozilla/5.0 (DunderMifflinCapital desk; +https://github.com)'
 
@@ -24,8 +25,17 @@ async function fetchJson(url, timeoutMs) {
   }
 }
 
-/** → { symbol, last, series: Map<'YYYY-MM-DD', close> } | null */
-export async function fetchHistory(ticker, { timeoutMs = 6000 } = {}) {
+/** → { symbol, last, series: Map<'YYYY-MM-DD', close> } | null
+ *  A year of history from Yahoo (no daily cap); Alpha Vantage daily as the backup
+ *  (its free plan returns ~100 days and only 25 calls a day — live quotes use it first). */
+export async function fetchHistory(ticker, opts = {}) {
+  const y = await fetchYahoo(ticker, opts)
+  if (y) return y
+  if (avKey()) return avDaily(ticker).catch(() => null)
+  return null
+}
+
+async function fetchYahoo(ticker, { timeoutMs = 6000 } = {}) {
   const sym = yahooSymbol(ticker)
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1y&interval=1d`
   const data = await fetchJson(url, timeoutMs)

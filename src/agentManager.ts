@@ -188,19 +188,24 @@ export function findWaypointPath(
   toX: number,
   toY: number,
   waypoints: Waypoint[],
+  opts: { jitter?: number; detours?: boolean } = {},
 ): { x: number; y: number }[] {
   if (waypoints.length === 0) return []
 
   const startWp = nearestWaypoint(fromX, fromY, waypoints)
   const endWp   = nearestWaypoint(toX, toY, waypoints)
 
-  const ids = maybeTakeLongWay(startWp.id, endWp.id, waypoints)
+  // Why: on the big Scranton floor a random detour can cross the whole building — disable there.
+  const ids = opts.detours === false
+    ? bfsWaypoints(startWp.id, endWp.id, waypoints)
+    : maybeTakeLongWay(startWp.id, endWp.id, waypoints)
   if (!ids) return [{ x: startWp.x, y: startWp.y }]
 
   const byId = new Map<string, Waypoint>(waypoints.map(w => [w.id, w]))
+  const j = opts.jitter ?? 1.5
   return ids.map(id => {
     const wp = byId.get(id)!
-    return { x: jitter(wp.x), y: jitter(wp.y) }
+    return { x: jitter(wp.x, j), y: jitter(wp.y, j) }
   })
 }
 

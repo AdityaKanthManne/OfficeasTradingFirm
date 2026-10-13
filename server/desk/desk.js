@@ -24,6 +24,7 @@ import { claudeAvailable, runClaude, extractJson } from './llm.js'
 import { analystPrompt, huddlePrompt, executionPrompt, reportPrompt, kickoffLine } from './prompts.js'
 import { offline } from './offline.js'
 import { buildReportMarkdown, reportHtml } from './report.js'
+import { onCall, meeting } from './staff.js'
 
 const REPORTS_DIR = join(PROJECT_DIR, 'reports')
 const STATE_DIR = join(homedir(), '.agent-office')
@@ -118,6 +119,8 @@ export function createDesk({ broadcast, addMessage, activeAgents }) {
     broadcast({ type: 'agent_working', agentId: id, status, desk: true, timestamp: Date.now() })
   }
   function walkOut(id, result) {
+    // Staff you called onto the floor stay there after helping with the book
+    if ([...onCall.values()].some(v => v.id === id)) return
     const a = activeAgents.get(id)
     if (a) { a.state = 'completed'; setTimeout(() => activeAgents.delete(id), 40_000) }
     broadcast({ type: 'agent_completed', agentId: id, result: String(result || '').slice(0, 120), desk: true, timestamp: Date.now() })
@@ -148,11 +151,14 @@ export function createDesk({ broadcast, addMessage, activeAgents }) {
   // ---- one agent turn --------------------------------------------------------
   async function agentTurn(ctx, role, promptFn, offlineFn, { walk = true, minMs = 6000 } = {}) {
     const e = empByRole(role)
-    const id = `desk-${ctx.id}-${role}`
+    const onFloor = onCall.get(role)
+    const id = onFloor?.id ?? `desk-${ctx.id}-${role}`
     const t0 = Date.now()
     if (walk) {
-      walkIn(e, id, `${e.short}: ${ctx.book.clientName}`.slice(0, 50))
-      await sleep(1200)
+      if (!onFloor) {
+        walkIn(e, id, `${e.short}: ${ctx.book.clientName}`.slice(0, 50))
+        await sleep(1200)
+      }
       working(id, WORK_STATUS[role] ?? 'working the book')
     }
     let out = null
@@ -206,7 +212,6 @@ export function createDesk({ broadcast, addMessage, activeAgents }) {
       const kevin = await agentTurn(ctx, 'pnl-controller', () => analystPrompt(empByRole('pnl-controller'), bookJson), () => offline['pnl-controller'](book), { minMs: 4000 })
       visuals.push(kevin.id)
       say(kevin.e, kevin.out.chat)
-      walkOut(kevin.id, '')
 
       // Analysts in parallel
       const roles = [...CORE_ANALYSTS]
@@ -217,8 +222,6 @@ export function createDesk({ broadcast, addMessage, activeAgents }) {
         const r = await agentTurn(ctx, role, () => analystPrompt(empByRole(role), bookJson), () => offline[role](book))
         visuals.push(r.id)
         say(r.e, r.out.chat)
-        await sleep(600)
-        walkOut(r.id, '')
         return r
       })
 
@@ -242,8 +245,15 @@ export function createDesk({ broadcast, addMessage, activeAgents }) {
         } catch (err) { console.warn('[desk] huddle failed:', err.message) }
       }
       if (!huddle?.length) huddle = offline.huddle(book)
-      system(`☕ Desk huddle — ${client}`)
+      // The desk huddle happens in the conference room — everyone walks in, argues, walks out
+      const ownMeeting = !meeting.active
+      if (ownMeeting) broadcast({ type: 'meeting_start', reason: `Desk huddle — ${client}`, timestamp: Date.now() })
+      system(`☕ Desk huddle in the conference room — ${client}`)
+      await sleep(Math.max(cfg.paceMs * 2, 4000)) // give everyone time to find a chair
       for (const l of huddle) { await sleep(cfg.paceMs); say(l.speaker, l.line) }
+      if (ownMeeting) broadcast({ type: 'meeting_end', timestamp: Date.now() })
+      // Analysts head home after the huddle
+      for (const v of visuals) walkOut(v, '')
 
       // Jim builds the execution plan
       running.stage = 'execution'

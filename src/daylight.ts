@@ -79,3 +79,28 @@ export function getPhaseLabel(phase: DayPhase): string {
 export function isDark(phase: DayPhase): boolean {
   return phase === 'night' || phase === 'dusk' || phase === 'dawn'
 }
+
+/** Scranton, PA — the office clock's sunrise/sunset. */
+export const SCRANTON_LAT = 41.4
+
+/** Day phase at a specific moment (the office clock). */
+export function phaseAt(date: Date, latitude = SCRANTON_LAT): DayPhase {
+  const hour = date.getHours() + date.getMinutes() / 60
+  const { sunrise, sunset } = getSunTimes(date, latitude)
+  if (hour < sunrise - 0.75) return 'night'
+  if (hour < sunrise + 0.5) return 'dawn'
+  if (hour < 12) return 'morning'
+  if (hour < sunset - 1.5) return 'afternoon'
+  if (hour < sunset - 0.25) return 'evening'
+  if (hour < sunset + 0.75) return 'dusk'
+  return 'night'
+}
+
+/** 0 = full daylight … 1 = full night, fading across dawn and dusk. */
+export function nightAt(date: Date, latitude = SCRANTON_LAT): number {
+  const hour = date.getHours() + date.getMinutes() / 60
+  const { sunrise, sunset } = getSunTimes(date, latitude)
+  const ramp = (x: number, a: number, b: number) => Math.max(0, Math.min(1, (x - a) / (b - a)))
+  if (hour < 12) return 1 - ramp(hour, sunrise - 0.75, sunrise + 0.5)
+  return ramp(hour, sunset - 0.25, sunset + 0.75)
+}

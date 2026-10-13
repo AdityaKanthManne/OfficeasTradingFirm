@@ -20,6 +20,13 @@ import { dirname } from 'path'
 import { addMessage, getMessages, markSeen, addReaction } from './chat-db.js'
 import db from './chat-db.js'
 import { createDesk } from './desk/desk.js'
+import { createClock } from './desk/clock.js'
+import { createTalk } from './desk/talk.js'
+import { createBriefing } from './desk/briefing.js'
+import { createMarketBell, isMarketOpen } from './desk/market.js'
+import { createGroupChat } from './desk/groupchat.js'
+import { avStatus } from './desk/alphavantage.js'
+import { createStaff } from './desk/staff.js'
 import { parsePortfolioText, parsePortfolioJson, PORTFOLIO_HELP } from './desk/parser.js'
 import { ROSTER, FIRM } from './desk/roster.js'
 
@@ -108,6 +115,13 @@ const activeAgents = new Map()
 
 // The trading desk — turns /portfolio requests into a full in-character review
 const desk = createDesk({ broadcast: (p) => broadcast(p), addMessage, activeAgents })
+// The office phone — call any employee onto the floor
+const staff = createStaff({ broadcast: (p) => broadcast(p), addMessage, activeAgents })
+const clock = createClock({ broadcast: (p) => broadcast(p) })
+const talk = createTalk({ broadcast: (p) => broadcast(p), addMessage })
+const briefing = createBriefing({ broadcast: (p) => broadcast(p), addMessage, staff })
+const bell = createMarketBell({ clock, staff, broadcast: (p) => broadcast(p), addMessage })
+const groupChat = createGroupChat({ broadcast: (p) => broadcast(p), addMessage, marketOpen: () => isMarketOpen(clock.now()) })
 
 /**
  * Generate a stable agent ID from the event payload.
@@ -257,7 +271,7 @@ function handleSlashCommand(cmd) {
       return '🧹 Chat cleared'
     }
     case '/help':
-      return '📋 Commands: /portfolio <holdings> — send a book to the trading desk, /desk — desk status, /roster — who does what, /reports — past client reports, /status — office stats, /agents — list agents, /clear — wipe chat history, /the-office — toggle the trading floor theme'
+      return '📋 Commands: /portfolio <holdings> — send a book to the trading desk, /meeting [topic] — everyone to the conference room (/meeting end to wrap up), /desk — desk status, /roster — who does what, /reports — past client reports, /status — office stats, /agents — list agents, /clear — wipe chat history, /the-office — toggle the trading floor theme'
     case '/desk': {
       const st = desk.status()
       if (st.status === 'running') return `📈 Desk is working on ${st.running.client} — stage: ${st.stage}`
@@ -290,7 +304,7 @@ function handleSlashCommand(cmd) {
  * No auth required (comes from the UI, not hooks)
  */
 app.post('/chat', (req, res) => {
-  const { sender, text } = req.body ?? {}
+  const { sender, text, to } = req.body ?? {}
   if (!sender || !text) {
     return res.status(400).json({ error: 'Missing sender or text' })
   }
@@ -299,6 +313,46 @@ app.post('/chat', (req, res) => {
   if (typeof text === 'string' && text.startsWith('/')) {
     const parts = text.split(' ')
     const cmd = parts[0]
+
+    // /meeting [reason] — everyone on the floor to the conference room; /meeting end — back to desks
+    if (/^\/meeting$/i.test(cmd)) {
+      const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
+      broadcast({ type: 'chat_message', ...userMsg })
+      const arg = text.slice(cmd.length).trim()
+      if (/^(end|over|stop|done)$/i.test(arg)) staff.endMeeting()
+      else {
+        staff.startMeeting(arg || 'Meeting')
+        const m = addMessage({ sender: 'Michael Scott', role: 'boss', text: `Conference room, everybody! ${arg ? `Topic: ${arg}.` : ''} Five minutes ago!` })
+        broadcast({ type: 'chat_message', ...m })
+      }
+      return res.json({ ok: true })
+    }
+
+    // /market — is the market open (office clock) + Alpha Vantage usage
+    if (/^\/market$/i.test(cmd)) {
+      const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
+      broadcast({ type: 'chat_message', ...userMsg })
+      const m = bell.status(), av = avStatus()
+      const label = { open: '🟢 OPEN', pre: '🟡 pre-market', after: '🟠 after hours', closed: '🔴 closed (weekend/holiday)' }[m.phase]
+      const avLine = av.configured ? `Alpha Vantage: ${av.callsToday} call${av.callsToday === 1 ? '' : 's'} today${av.limited ? ' — daily limit reached, using Yahoo/model data until tomorrow' : ''}; ${av.cachedQuotes} cached quote${av.cachedQuotes === 1 ? '' : 's'}.` : 'Alpha Vantage: no key set (firm/desk.secrets.json) — using Yahoo/model data.'
+      const sys = addMessage({ sender: 'system', text: `📈 Market ${label} · ${m.ny} (office clock). Regular session 9:30–16:00 ET, Mon–Fri.\n${avLine}`, isSystem: true })
+      broadcast({ type: 'chat_message', ...sys, isSystem: true })
+      return res.json({ ok: true })
+    }
+
+    // /briefing AAPL [question] — all-hands: everyone gives their take, Jim wraps up
+    if (/^\/(briefing|allhands|all-hands)$/i.test(cmd)) {
+      const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
+      broadcast({ type: 'chat_message', ...userMsg })
+      const rest = text.slice(cmd.length).trim()
+      const [ticker, ...q] = rest.split(/\s+/)
+      const r = briefing.run(ticker, q.join(' '))
+      if (!r.ok) {
+        const m = addMessage({ sender: 'system', text: `📋 ${r.error}`, isSystem: true })
+        broadcast({ type: 'chat_message', ...m, isSystem: true })
+      }
+      return res.json(r)
+    }
 
     // /portfolio <holdings> | <mandate> — hand a book to the trading desk
     if (/^\/(portfolio|book)$/i.test(cmd)) {
@@ -344,6 +398,10 @@ app.post('/chat', (req, res) => {
   } catch {}
 
   console.log(`[chat] ${msg.sender}: ${msg.text}`)
+  // Talking to someone face to face on the floor → they answer in character
+  if (to && typeof to === 'string') talk.reply(to, String(text).slice(0, 2000)).catch(() => {})
+  // Asked the whole floor → whoever's field it is answers (respects the AI On/Off switch)
+  else if (req.body?.boss && !briefing.isRunning()) groupChat.answer(String(text).slice(0, 2000)).catch(() => {})
   res.json({ ok: true })
 })
 
@@ -463,6 +521,45 @@ app.post('/portfolio', (req, res) => {
 })
 
 app.get('/portfolio/status', (_req, res) => res.json(desk.status()))
+
+// ---- Office phone -----------------------------------------------------------
+app.get('/staff', (_req, res) => res.json(staff.directory()))
+app.post('/staff/call', async (req, res) => {
+  const role = String(req.body?.role ?? '')
+  if (role === 'all-hands') return res.json(await staff.allHands())
+  res.json(await staff.call(role))
+})
+app.post('/staff/meeting', (req, res) => {
+  const action = String(req.body?.action ?? 'start')
+  if (action === 'end') return res.json(staff.endMeeting())
+  if (action === 'all-staff') return res.json(staff.allStaffMeeting())
+  if (action === 'planning') return res.json(staff.planningCall(String(req.body?.dept ?? '')))
+  res.json(staff.startMeeting(String(req.body?.reason ?? 'Meeting')))
+})
+app.post('/staff/desks', (_req, res) => res.json(staff.goToDesks()))
+
+// Walk-up conversations — Michael meets someone on the floor
+app.post('/talk/encounter', (req, res) => {
+  const role = String(req.body?.role ?? '')
+  const place = req.body?.place ? String(req.body.place).slice(0, 60) : undefined
+  talk.encounter(role, { place }).catch(() => {})
+  res.json({ ok: true })
+})
+app.post('/talk/end', (req, res) => res.json(talk.end(String(req.body?.role ?? ''))))
+
+// Office clock — forward only
+app.get('/clock', (_req, res) => res.json(clock.snapshot()))
+app.get('/market', (_req, res) => res.json({ ...bell.status(), alphaVantage: avStatus() }))
+app.post('/clock', (req, res) => {
+  const b = req.body ?? {}
+  if (b.action === 'advance') { const r = clock.advance(Number(b.hours ?? 2) * 3600 * 1000); bell.tick(); return res.json(r) }
+  if (b.action === 'skip') { const r = clock.skipTo(b.at); bell.tick(); return res.json(r) }
+  res.status(400).json({ ok: false, error: 'action must be advance or skip' })
+})
+app.post('/staff/dismiss', (req, res) => {
+  const role = String(req.body?.role ?? '')
+  res.json(role === 'all' ? staff.dismissAll() : staff.dismiss(role))
+})
 app.get('/roster/firm', (_req, res) => res.json(ROSTER))
 
 app.get('/reports', (_req, res) => {
