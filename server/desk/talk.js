@@ -15,6 +15,7 @@ import { personaBlock } from './prompts.js'
 import { claudeAvailable, runClaude } from './llm.js'
 import { tickersInText } from './classify.js'
 import { gather, dataText, offlineAnswer } from './groupchat.js'
+import { jobLine, adviceLine, roleLine } from './joblines.js'
 
 const LATEST_FILE = join(homedir(), '.agent-office', 'desk-latest.json')
 const pick = a => a[Math.floor(Math.random() * a.length)]
@@ -115,12 +116,18 @@ const GENERIC_ACK = e => [`On it, Michael. ${e.catchphrases?.[1] ?? ''}`.trim(),
   `Leave it with me. ${pick(e.catchphrases ?? ['Okay.'])}`]
 
 function offlineGreeting(e) {
-  return pick(GREET[e.slug] ?? GENERIC_GREET(e))
+  // half the time a character hello, half the time what they're in the middle of at their job
+  if (Math.random() < 0.5) return pick(GREET[e.slug] ?? GENERIC_GREET(e))
+  return `${pick(['Hey Michael.', 'Oh — hi, Michael.', 'Michael!', 'Hey boss.'])} ${jobLine(e, book())}`
 }
 
-export function offlineReply(e, text) {
+export function offlineReply(e, text, { preferJob = false } = {}) {
   const t = text.toLowerCase()
   const b = book()
+  // what's their job / what are they on / what do they think — answered from their position
+  if (/\b(what do you do|what's your job|what is your job|your role|your position|your title|who are you|what are you in charge of)\b/.test(t)) return roleLine(e)
+  if (/\b(working on|busy with|up to|status|update|anything new|what's new|how's work|how is work|what are you doing|on your plate|today's plan)\b/.test(t)) return jobLine(e, b)
+  if (/\b(what do you think|thoughts|should (we|i)|recommend|advice|opinion|your take|your view|what would you do|any tips)\b/.test(t)) return adviceLine(e, b)
   // their own beat → talk shop, with numbers when there's a book
   const onBeat = (e.keywords ?? []).some(k => t.includes(k))
   const asksBook = /\b(book|portfolio|risk|position|holding|p&l|pnl|numbers|market|how are we|how's it|status)\b/.test(t)
@@ -152,10 +159,16 @@ export function offlineReply(e, text) {
   }
   if (/\b(hi|hello|hey|morning|sup|what's up|how are you|how is everyone|how's everyone|how are we)\b/.test(t)) return offlineGreeting(e)
   if (/\b(bye|later|see you|thanks|thank you)\b/.test(t)) return pick([`Anytime, Michael.`, `See you around, Michael.`, pick(e.catchphrases ?? ['Bye.'])])
+  // nothing specific: answer from their position (always in the group chat, often face to face)
+  if (preferJob || Math.random() < 0.5) return Math.random() < 0.6 ? adviceLine(e, b) : jobLine(e, b)
   return pick(ACK[e.slug] ?? GENERIC_ACK(e)).replace('{q}', text.replace(/[?!.]+$/, '').slice(0, 40))
 }
 
 // ---------------------------------------------------------------------------
+
+/** the firm's live work (risk regime, books, alphas, tickets) — set by operations.js */
+let opsHook = null
+export function setOpsHook(h) { opsHook = h }
 
 export function createTalk({ broadcast, addMessage }) {
   /** role → { history: [{ who, text }], at } */
@@ -171,10 +184,11 @@ export function createTalk({ broadcast, addMessage }) {
     return pick(ACK[e.slug] ?? GENERIC_ACK(e))
   }
 
+  /** direct conversation lines go to the floating chat box — not the #trading-floor group chat */
   function say(e, text) {
-    const msg = addMessage({ sender: e.name, role: e.role, text: String(text).slice(0, 600) })
-    broadcast({ type: 'chat_message', ...msg, talk: true })
+    broadcast({ type: 'dm_message', role: e.role, sender: e.name, title: e.title, from: 'staff', text: String(text).slice(0, 600), at: Date.now() })
   }
+  const typing = e => broadcast({ type: 'dm_typing', role: e.role, sender: e.name, at: Date.now() })
 
   async function llmLine(e, instruction, history) {
     const cfg = loadDeskConfig()
@@ -183,10 +197,12 @@ export function createTalk({ broadcast, addMessage }) {
     const prompt = `${personaBlock(e)}
 
 ${bookContext()}
+${opsHook?.context?.() ?? ''}
 
 You're on the Scranton floor of ${ROSTER.firm?.fullName ?? 'Dunder Mifflin Capital Partners'}. Michael Scott, the Managing Partner (the user), is standing at your spot talking to you face to face.
 ${transcript ? `Conversation so far:\n${transcript}\n` : ''}
 ${instruction}
+Ground it in your actual job as ${e.title} (${e.deskDuty}) whenever it fits — what you're working on, what you'd watch, what you'd do.
 Stay fully in character. Say it out loud like you would in the show: 1–3 sentences, under 60 words. If he asks about the book or markets, answer helpfully and accurately from the desk context above, and don't invent prices. Reply with only what you say.`
     try {
       const out = await runClaude(prompt, { model: cfg.model, timeoutSec: 45 })
@@ -200,8 +216,8 @@ Stay fully in character. Say it out loud like you would in the show: 1–3 sente
     if (!e || role === 'boss') return { ok: false, error: 'Nobody by that role works here.' }
     const c = { history: [], at: Date.now() }
     convos.set(role, c)
-    broadcast({ type: 'chat_typing', sender: e.name })
-    const line = (await llmLine(e, `He just walked up to you${place ? ` ${place}` : ''}. Greet him the way your character would, or tell him what you're in the middle of right now.`, [])) ??
+    typing(e)
+    const line = (await llmLine(e, `He just walked up to you${place ? ` ${place}` : ''}. Greet him the way your character would and tell him what you're in the middle of at your job right now.`, [])) ??
       offlineGreeting(e)
     c.history.push({ who: 'staff', text: line })
     say(e, line)
@@ -216,7 +232,7 @@ Stay fully in character. Say it out loud like you would in the show: 1–3 sente
     convos.set(role, c)
     c.history.push({ who: 'michael', text })
     c.at = Date.now()
-    broadcast({ type: 'chat_typing', sender: e.name })
+    typing(e)
     // a stock in the question? bring live numbers (Alpha Vantage quote, cached)
     const tickers = tickersInText(text)
     const data = tickers.length ? await gather(tickers).catch(() => []) : []
@@ -228,13 +244,15 @@ Stay fully in character. Say it out loud like you would in the show: 1–3 sente
       return { ok: true }
     }
     const line = (await llmLine(e, 'Answer what he just said.', c.history)) ??
-      fresh(e, c, i => (i === 0 ? offlineReply(e, text) : pick(ACK[e.slug] ?? GENERIC_ACK(e)).replace('{q}', text.replace(/[?!.]+$/, '').slice(0, 40))))
+      opsHook?.answer?.(e.slug, text) ??
+      fresh(e, c, i => (i < 5 ? offlineReply(e, text) : adviceLine(e, book())))
     c.history.push({ who: 'staff', text: line })
     say(e, line)
     return { ok: true }
   }
 
   function end(role) { convos.delete(role); return { ok: true } }
+  const history = role => convos.get(role)?.history ?? []
 
-  return { encounter, reply, end }
+  return { encounter, reply, end, history }
 }

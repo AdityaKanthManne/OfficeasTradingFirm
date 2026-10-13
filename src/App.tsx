@@ -7,7 +7,10 @@ import FurnitureRenderer from './components/FurnitureRenderer'
 import { Agent, OfficeEvent, AGENT_CONFIGS } from './types'
 import { getCurrentPhase, getPhaseLabel, phaseAt, nightAt, type DayPhase } from './daylight'
 import OfficeClock from './components/OfficeClock'
-import { EMPLOYEE_BY_ROLE } from './firm'
+import { EMPLOYEE_BY_ROLE, departmentOf } from './firm'
+import DirectChat, { type DirectMsg } from './components/DirectChat'
+import OpsDesk, { type OpsState, type OpsTab } from './components/OpsDesk'
+import { EMPLOYEE_BY_SLUG } from './firm'
 import { ROOMS, type AgentSpot } from './rooms'
 import { useAgentSocket } from './hooks/useAgentSocket'
 import * as sfx from './sounds'
@@ -31,7 +34,7 @@ import TickerTape, { type DeskState } from './components/TickerTape'
 import StaffPhone from './components/StaffPhone'
 import { SCRANTON_ROOM, FLOOR, FLOOR_SPOTS, roomPhrase, IS_ISO, findGridPath, pctToWorld, worldToPct, walkable, roomAt, facingToward, seatAt, nearestWalkable } from './floor'
 import FloorCamera, { type CameraApi } from './components/FloorCamera'
-import { getCharacterBaseForRole, themedDisplayName } from './theme'
+import { getCharacterBaseForRole, themedDisplayName, getSpritePath } from './theme'
 import { ROLE_TO_CHAR } from './config'
 import { FIRM } from './firm'
 import { pickEvent } from './events'
@@ -732,7 +735,36 @@ const App: React.FC = () => {
   }, [])
 
   // ---- Walk-up conversations: Michael stops next to someone → they greet him, chat goes to them ----
-  const [talkPartner, setTalkPartner] = useState<{ id: string; role: string; name: string; color: string } | null>(null)
+  const [talkPartner, setTalkPartner] = useState<{ id: string; role: string; name: string; color: string; title?: string; department?: string } | null>(null)
+  /** the floating one-on-one chat: messages per person (kept for the session), and who's typing */
+  const [dms, setDms] = useState<Map<string, DirectMsg[]>>(new Map())
+  const [dmTyping, setDmTyping] = useState<string | null>(null)
+  // The firm's work — inbox, project board, risk, books, alphas
+  const [ops, setOps] = useState<OpsState | null>(null)
+  const [opsOpen, setOpsOpen] = useState(false)
+  const [opsTab, setOpsTab] = useState<OpsTab>('inbox')
+  const [opsEmail, setOpsEmail] = useState<string | null>(null)
+  const [mailToasts, setMailToasts] = useState<{ id: string; threadId: string; from: string; fromName: string; subject: string; high: boolean }[]>([])
+  const opsTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshOps = useCallback(() => {
+    if (opsTimer.current) clearTimeout(opsTimer.current)
+    opsTimer.current = setTimeout(() => {
+      fetch('http://127.0.0.1:3334/ops/state').then(r => r.json()).then((d: OpsState) => { if (d && Array.isArray(d.emails)) setOps(d) }).catch(() => {})
+    }, 250)
+  }, [])
+  useEffect(() => { refreshOps(); const t = setInterval(refreshOps, 60_000); return () => clearInterval(t) }, [refreshOps])
+  const openOps = useCallback((tab: OpsTab, threadId: string | null = null) => {
+    setOpsTab(tab); if (threadId) setOpsEmail(threadId); setOpsOpen(true); refreshOps()
+  }, [refreshOps])
+  const avatarFor = useCallback((slug: string) => {
+    const role = slug === 'michael' ? BOSS_ROLE : (EMPLOYEE_BY_SLUG[slug]?.role ?? 'default')
+    return getSpritePath(`role-${role}`, role, ROLE_TO_CHAR[role] ?? 'employee-3', 'front-right')
+  }, [])
+  const dmTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addDm = useCallback((role: string, m: DirectMsg) => setDms(prev => {
+    const n = new Map(prev); n.set(role, [...(prev.get(role) ?? []), m].slice(-60)); return n
+  }), [])
+  const partnerInfo = (role: string) => ({ title: EMPLOYEE_BY_ROLE[role]?.title, department: departmentOf(role)?.name })
   const talkPartnerRef = useRef<typeof talkPartner>(null)
   talkPartnerRef.current = talkPartner
   const metAtRef = useRef(new Map<string, number>())          // agent id → last time Michael met them
@@ -768,7 +800,7 @@ const App: React.FC = () => {
     if (!cur || cur.id !== id) {
       const cfg = AGENT_CONFIGS[p.role] ?? AGENT_CONFIGS['default']
       const name = EMPLOYEE_BY_ROLE[p.role]?.name ?? themedDisplayName(p.role, p.name)
-      setTalkPartner({ id: p.id, role: p.role, name, color: cfg.color })
+      setTalkPartner({ id: p.id, role: p.role, name, color: cfg.color, ...partnerInfo(p.role) })
       fetch('http://127.0.0.1:3334/talk/encounter', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: p.role, place: p.assignedSpotId ? roomPhrase(p.assignedSpotId) : undefined }),
@@ -831,7 +863,7 @@ const App: React.FC = () => {
       metAtRef.current.set(best.id, now)
       const cfg = AGENT_CONFIGS[best.role] ?? AGENT_CONFIGS['default']
       const name = EMPLOYEE_BY_ROLE[best.role]?.name ?? themedDisplayName(best.role, best.name)
-      setTalkPartner({ id: best.id, role: best.role, name, color: cfg.color })
+      setTalkPartner({ id: best.id, role: best.role, name, color: cfg.color, ...partnerInfo(best.role) })
       const place = best.assignedSpotId ? roomPhrase(best.assignedSpotId) : undefined
       fetch('http://127.0.0.1:3334/talk/encounter', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: best.role, place }),
@@ -1055,6 +1087,37 @@ const App: React.FC = () => {
       const role = (event as unknown as { role?: string }).role
       const a = agentsRef.current.find(x => x.role === role)
       if (a && event.text) sayBubble(a.id, event.text)
+    }
+    if ((event.type as string) === 'dm_typing') {
+      const ev = event as unknown as { role: string }
+      setDmTyping(ev.role)
+      if (dmTypingTimer.current) clearTimeout(dmTypingTimer.current)
+      dmTypingTimer.current = setTimeout(() => setDmTyping(null), 15000)
+      return
+    }
+    if ((event.type as string) === 'dm_message') {
+      const ev = event as unknown as { role: string; text: string; at: number }
+      addDm(ev.role, { from: 'staff', text: ev.text, at: ev.at })
+      setDmTyping(prev => (prev === ev.role ? null : prev))
+      const a = agentsRef.current.find(x => x.role === ev.role)
+      if (a) sayBubble(a.id, ev.text)
+      if (!sfx.isMuted()) sfx.playNotification()
+      return
+    }
+    if ((event.type as string) === 'ops_update') { refreshOps(); return }
+    if ((event.type as string) === 'ops_email') {
+      const ev = event as unknown as { id: string; threadId: string; from: string; fromName: string; subject: string; priority?: string | null }
+      setMailToasts(prev => [...prev.filter(t => t.id !== ev.id), { id: ev.id, threadId: ev.threadId ?? ev.id, from: ev.from, fromName: ev.fromName, subject: ev.subject, high: ev.priority === 'high' }].slice(-3))
+      setTimeout(() => setMailToasts(prev => prev.filter(t => t.id !== ev.id)), 9000)
+      if (!sfx.isMuted()) sfx.playNotification()
+      refreshOps()
+      return
+    }
+    if ((event.type as string) === 'staff_activity') {
+      const ev = event as unknown as { role: string; text: string }
+      const a = agentsRef.current.find(x => x.role === ev.role)
+      if (a && !talkPartnerRef.current) sayBubble(a.id, ev.text, 5000)
+      return
     }
     if ((event.type as string) === 'market_bell') {
       if (!sfx.isMuted()) sfx.playBell()
@@ -2639,6 +2702,13 @@ const App: React.FC = () => {
         >
           {dayNightMode === 'auto' ? 'AUTO' : dayNightMode === 'day' ? 'DAY' : 'NIGHT'}
         </button>
+        {FLOOR_MODE && (
+          <span className="title-ops">
+            <button className={opsOpen && opsTab === 'inbox' ? 'on' : ''} onClick={() => (opsOpen && opsTab === 'inbox' ? setOpsOpen(false) : openOps('inbox'))} title="Email inbox">📧 Inbox{ops?.unread ? <b>{ops.unread}</b> : null}</button>
+            <button className={opsOpen && opsTab === 'board' ? 'on' : ''} onClick={() => (opsOpen && opsTab === 'board' ? setOpsOpen(false) : openOps('board'))} title="Project board">📋 Board{ops && ops.tickets.some(t => t.needsMichael && t.status !== 'Done') ? <b className="warn">{ops.tickets.filter(t => t.needsMichael && t.status !== 'Done').length}</b> : null}</button>
+            <button className={opsOpen && ['risk', 'books', 'alphas'].includes(opsTab) ? 'on' : ''} onClick={() => (opsOpen && ['risk', 'books', 'alphas'].includes(opsTab) ? setOpsOpen(false) : openOps('risk'))} title="Risk, books and alphas">📈 Desk{ops?.risk ? <i className={`dot ${ops.risk.regime.toLowerCase()}`} /> : null}</button>
+          </span>
+        )}
         {FLOOR_MODE && <OfficeClock offsetMs={clockOffset} />}
         <span className="title-bar-phase">{getPhaseLabel(effectivePhase)}</span>
       </div>
@@ -2655,6 +2725,36 @@ const App: React.FC = () => {
           </div>
         )}
         {ISO_MODE && theme === 'office' && !isHelperMode && <TickerTape desk={deskState} />}
+        {FLOOR_MODE && mailToasts.length > 0 && !opsOpen && (
+          <div className="mail-toasts">
+            {mailToasts.map(t => (
+              <button key={t.id} className={`mail-toast${t.high ? ' high' : ''}`} onClick={() => { setMailToasts(p => p.filter(x => x.id !== t.id)); openOps('inbox', t.threadId) }}>
+                <img src={avatarFor(t.from)} alt="" />
+                <span><b>{t.fromName}</b><span>{t.subject}</span></span>
+              </button>
+            ))}
+          </div>
+        )}
+        {ISO_MODE && talkPartner && (
+          <DirectChat
+            name={talkPartner.name}
+            title={talkPartner.title}
+            department={talkPartner.department}
+            color={talkPartner.color}
+            avatar={getSpritePath(`role-${talkPartner.role}`, talkPartner.role, ROLE_TO_CHAR[talkPartner.role] ?? 'employee-3', 'front-right')}
+            messages={dms.get(talkPartner.role) ?? []}
+            typing={dmTyping === talkPartner.role}
+            onClose={endTalk}
+            onSend={t => {
+              const role = talkPartner.role
+              addDm(role, { from: 'michael', text: t, at: Date.now() })
+              sayBubble(BOSS_ID, t, 6000)
+              fetch('http://127.0.0.1:3334/talk/say', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role, text: t }),
+              }).catch(() => {})
+            }}
+          />
+        )}
         {ISO_MODE ? (
           <FloorCamera
             ref={cameraRef}
@@ -2692,6 +2792,9 @@ const App: React.FC = () => {
         )}
       </div>
 
+      {opsOpen && (
+        <OpsDesk state={ops} tab={opsTab} setTab={setOpsTab} onClose={() => setOpsOpen(false)} refresh={refreshOps} avatarFor={avatarFor} openEmail={opsEmail} setOpenEmail={setOpsEmail} />
+      )}
       <SlackChat
         messages={messages}
         muted={muted}
@@ -2702,9 +2805,8 @@ const App: React.FC = () => {
           const bossCfg = AGENT_CONFIGS[BOSS_ROLE] ?? AGENT_CONFIGS['default']
           addMsg(bossCfg.title, BOSS_ROLE, bossCfg.color, text)
           setAutoTypeText(undefined)
-          // Talking to someone on the floor? Say it out loud and send it to them.
-          const to = ISO_MODE && !text.startsWith('/') ? talkPartnerRef.current?.role : undefined
-          if (to) sayBubble(BOSS_ID, text, 6000)
+          // #trading-floor is the group chat — one-on-ones happen in the floating box
+          const to: string | undefined = undefined
           // Send to server so Claude can read it
           fetch('http://127.0.0.1:3334/chat', {
             method: 'POST',
@@ -2715,8 +2817,6 @@ const App: React.FC = () => {
         autoTypeText={autoTypeText}
         dayPhase={effectivePhase}
         typingUser={chatTypingUser}
-        talkingTo={ISO_MODE ? talkPartner : null}
-        onEndTalk={endTalk}
         lastSeenId={lastSeenId}
         onReaction={(messageId, reactions) => {
           setMessages(prev => prev.map(m =>

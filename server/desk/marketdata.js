@@ -35,7 +35,7 @@ export async function fetchHistory(ticker, opts = {}) {
   return null
 }
 
-async function fetchYahoo(ticker, { timeoutMs = 6000 } = {}) {
+export async function fetchYahoo(ticker, { timeoutMs = 6000 } = {}) {
   const sym = yahooSymbol(ticker)
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1y&interval=1d`
   const data = await fetchJson(url, timeoutMs)

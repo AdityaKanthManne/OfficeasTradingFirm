@@ -275,18 +275,11 @@ const SlackChat: React.FC<SlackChatProps> = ({ messages, muted, volume, onToggle
             <span className="slack-slash-cmd">/the-office</span>
           </div>
         )}
-        {talkingTo && (
-          <div className="slack-talking" style={{ borderColor: talkingTo.color }}>
-            <span className="slack-talking-dot" style={{ background: talkingTo.color }} />
-            <span>Talking with <b>{talkingTo.name}</b> — ask them anything</span>
-            <button onClick={onEndTalk} title="End the conversation" aria-label="End the conversation">×</button>
-          </div>
-        )}
         <div className="slack-input-bar">
           <input
             type="text"
             className="slack-input-field"
-            placeholder={talkingTo ? `Say something to ${talkingTo.name.split(' ')[0]}…` : getTheme() === 'office' ? 'Message #trading-floor — try /portfolio AAPL 40%, MSFT 30%, TLT 30%' : 'Message #office-general'}
+            placeholder={getTheme() === 'office' ? 'Ask the floor anything — or /briefing AAPL, /portfolio …' : 'Message #office-general'}
             value={inputText}
             onChange={e => {
               const val = e.target.value

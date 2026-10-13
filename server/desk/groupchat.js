@@ -126,7 +126,7 @@ export function dataText(d) {
 // ---------------------------------------------------------------------------
 export function offlineAnswer(e, text, data) {
   const d = data[0]
-  if (!d) return offlineReply(e, text)
+  if (!d) return offlineReply(e, text, { preferJob: true })
   const { t: T, q, s } = d
   const chg = q?.changePct
   const priceStr = q?.price ? `${T} is at $${q.price.toFixed(2)}${chg != null ? ` (${pct(chg)} today)` : ''}`

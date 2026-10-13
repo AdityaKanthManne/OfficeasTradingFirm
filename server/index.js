@@ -21,10 +21,11 @@ import { addMessage, getMessages, markSeen, addReaction } from './chat-db.js'
 import db from './chat-db.js'
 import { createDesk } from './desk/desk.js'
 import { createClock } from './desk/clock.js'
-import { createTalk } from './desk/talk.js'
+import { createTalk, setOpsHook } from './desk/talk.js'
 import { createBriefing } from './desk/briefing.js'
 import { createMarketBell, isMarketOpen } from './desk/market.js'
 import { createGroupChat } from './desk/groupchat.js'
+import { createOperations } from './desk/operations.js'
 import { avStatus } from './desk/alphavantage.js'
 import { createStaff } from './desk/staff.js'
 import { parsePortfolioText, parsePortfolioJson, PORTFOLIO_HELP } from './desk/parser.js'
@@ -122,6 +123,10 @@ const talk = createTalk({ broadcast: (p) => broadcast(p), addMessage })
 const briefing = createBriefing({ broadcast: (p) => broadcast(p), addMessage, staff })
 const bell = createMarketBell({ clock, staff, broadcast: (p) => broadcast(p), addMessage })
 const groupChat = createGroupChat({ broadcast: (p) => broadcast(p), addMessage, marketOpen: () => isMarketOpen(clock.now()) })
+// The firm's working day — risk checks, alpha report, book updates, emails, the project board
+const ops = createOperations({ broadcast: (p) => broadcast(p), addMessage, clock })
+ops.start()
+setOpsHook({ context: ops.context, answer: ops.answer })
 
 /**
  * Generate a stable agent ID from the event payload.
@@ -354,6 +359,15 @@ app.post('/chat', (req, res) => {
       return res.json(r)
     }
 
+    // /risk, /alphas, /books, /pnl … — have that person do their job right now
+    const OPS_CMDS = { '/risk': 'risk', '/alphas': 'alpha', '/alpha': 'alpha', '/books': 'books', '/pnl': 'pnl', '/mandate': 'mandate', '/settle': 'settle', '/macro': 'macro', '/buzz': 'buzz', '/crypto': 'crypto' }
+    if (OPS_CMDS[cmd.toLowerCase()]) {
+      const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
+      broadcast({ type: 'chat_message', ...userMsg })
+      ops.run(OPS_CMDS[cmd.toLowerCase()]).catch(e => console.warn('[ops]', e.message))
+      return res.json({ ok: true })
+    }
+
     // /portfolio <holdings> | <mandate> — hand a book to the trading desk
     if (/^\/(portfolio|book)$/i.test(cmd)) {
       const userMsg = addMessage({ sender: clampString(sender), text: clampString(text, 2000) })
@@ -546,14 +560,42 @@ app.post('/talk/encounter', (req, res) => {
   res.json({ ok: true })
 })
 app.post('/talk/end', (req, res) => res.json(talk.end(String(req.body?.role ?? ''))))
+// Michael says something in the floating chat box → only that person hears it (not the group chat)
+app.post('/talk/say', (req, res) => {
+  const role = String(req.body?.role ?? ''), text = String(req.body?.text ?? '').slice(0, 2000)
+  if (!role || !text) return res.status(400).json({ ok: false })
+  talk.reply(role, text).catch(() => {})
+  res.json({ ok: true })
+})
+app.get('/talk/history', (req, res) => res.json({ history: talk.history(String(req.query.role ?? '')) }))
+
+
+// The firm's work — inbox, project board, risk, books, alphas
+app.get('/ops/state', async (_req, res) => { try { res.json(await ops.state()) } catch (e) { res.status(500).json({ error: e.message }) } })
+app.post('/ops/email/:id/read', (req, res) => res.json(ops.readEmail(req.params.id, req.body?.read !== false)))
+app.post('/ops/email/read-all', (_req, res) => res.json(ops.readAll()))
+app.post('/ops/email/:id/action', async (req, res) => res.json(await ops.action(req.params.id, String(req.body?.action ?? ''))))
+app.post('/ops/email/:id/reply', async (req, res) => {
+  const text = String(req.body?.text ?? '').slice(0, 4000).trim()
+  if (!text) return res.status(400).json({ ok: false })
+  res.json(await ops.reply(req.params.id, text))
+})
+app.post('/ops/email', async (req, res) => {
+  const b = req.body ?? {}
+  if (!b.to || !String(b.body ?? '').trim()) return res.status(400).json({ ok: false, error: 'to and body required' })
+  res.json(await ops.compose(String(b.to), String(b.subject ?? '').slice(0, 200), String(b.body).slice(0, 4000)))
+})
+app.post('/ops/ticket', (req, res) => res.json(ops.createTicket(req.body ?? {})))
+app.post('/ops/ticket/:id', async (req, res) => res.json(await ops.updateTicket(req.params.id, req.body ?? {})))
+app.post('/ops/run/:job', async (req, res) => { try { res.json(await ops.run(req.params.job)) } catch (e) { res.status(500).json({ ok: false, error: e.message }) } })
 
 // Office clock — forward only
 app.get('/clock', (_req, res) => res.json(clock.snapshot()))
 app.get('/market', (_req, res) => res.json({ ...bell.status(), alphaVantage: avStatus() }))
 app.post('/clock', (req, res) => {
   const b = req.body ?? {}
-  if (b.action === 'advance') { const r = clock.advance(Number(b.hours ?? 2) * 3600 * 1000); bell.tick(); return res.json(r) }
-  if (b.action === 'skip') { const r = clock.skipTo(b.at); bell.tick(); return res.json(r) }
+  if (b.action === 'advance') { const r = clock.advance(Number(b.hours ?? 2) * 3600 * 1000); bell.tick(); ops.tick().catch(() => {}); return res.json(r) }
+  if (b.action === 'skip') { const r = clock.skipTo(b.at); bell.tick(); ops.tick().catch(() => {}); return res.json(r) }
   res.status(400).json({ ok: false, error: 'action must be advance or skip' })
 })
 app.post('/staff/dismiss', (req, res) => {

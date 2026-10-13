@@ -140,14 +140,12 @@ That file is git-ignored, so your key never goes to GitHub. You can also set `AL
 
 **The opening bell.** The office follows NYSE hours (9:30–16:00 New York time, Monday–Friday, NYSE holidays off) on the office clock. At the opening bell, Michael rings it, everyone is called onto the floor, and everyone goes to their desk (desk-sharers find a shared spot). Staff called in at the bell stay until you dismiss them. If you open the office during market hours, the same happens a few seconds after it loads. Skipping the clock to a market open (+2h, or *Skip to… Next market open*) rings the bell too. The closing bell is just an announcement.
 
-**Ask the group chat.** Ask anything in #trading-floor and the people whose field it is answer, in character. "How is apple doing today" gets Oscar on price and trend, Kelly on sentiment and Dwight on risk. "What's the Fed going to do" gets Jan. "Is it a good time to buy bitcoin" gets Ryan.
+**Ask the group chat.** The #trading-floor sidebar is for the whole firm. Ask anything and the people whose field it is answer in character, from their position. "How is apple doing today" gets Oscar on price and trend, Kelly on sentiment and Dwight on risk. "What's the Fed going to do" gets Jan. "Is it a good time to buy bitcoin" gets Ryan.
 
 - Name someone ("Dwight, how risky is TSLA?") and they answer.
 - Company names, tickers and `$TICKER` are recognised, and the live quote is handed to whoever answers.
 - Answers come from the Claude Code CLI when `"llm": "claude"` is set, otherwise from built-in lines.
 - The **AI On/Off** switch in the chat header turns staff answers on and off.
-
-**Click to talk.** Click anyone on the floor and Michael walks over and starts a conversation with them: the same walk-up conversation as below, without having to walk there yourself.
 
 **All-hands briefing.** Type `/briefing AAPL` (optionally add a question, e.g. `/briefing NVDA is this too crowded?`). Michael calls everyone into the conference room and Jim runs the room. The other 25 each give one take from their own job's angle, with a speech bubble and a 🟢/⚪/🔴 stance in chat. They go branch by branch:
 
@@ -166,12 +164,13 @@ Jim wraps up with the tally and the desk view. Pam posts a report with every tak
 - With `"llm": "claude"`, every take is written by Claude in character (one call per branch, started up front). Otherwise built-in lines are used.
 - Walk-up greetings pause while a meeting is on. In a packed room, only the person speaking shows a nameplate.
 
-**Walk-up conversations.** Walk, click or drop Michael next to someone and stop there. They greet you in character, or tell you what they're in the middle of, with a speech bubble over their head and the line in chat. A *Talking with Dwight Schrute* chip appears above the chat box, and until you walk away, whatever you type goes to them. They answer as that character, in chat and in a bubble.
+**Talking with your staff (the floating chat box).** Click anyone on the floor, or walk or drop Michael next to them and stop. A small chat box opens on the floor, separate from the #trading-floor group chat; only you and they are in it.
 
-- If you ask about the book, they answer from the latest portfolio on the desk.
-- Replies come from the Claude Code CLI when `"llm": "claude"` is set in `firm/desk.config.json`. Otherwise built-in lines in each character's voice are used.
-- Walking more than a few steps away, leaving the room or clicking × ends the conversation.
-- People don't greet you again for 90 seconds, and walking past doesn't count; Michael has to stop.
+- The header shows their name, position and department (e.g. *Kevin Malone · P&L & Position Reconciliation · Fund Accounting & Controllers*).
+- They greet you in character or tell you what they're in the middle of at their job. Their lines also appear in speech bubbles on the floor, and each conversation's history is kept for the session.
+- Everyone has position-based dialogue (`server/desk/joblines.js`). *"What are you working on?"* gets their actual desk work, for example Dwight running stress tests or Darryl settling trades T+1. *"What do you think?"* or *"should we…?"* gets their professional take. *"What do you do here?"* gets their title and job. Ask about a stock and they answer from their job's angle with the live quote; ask about the book and they quote the latest portfolio.
+- Replies come from the Claude Code CLI when `"llm": "claude"` is set (told to stay in character and grounded in their job), otherwise from built-in lines.
+- Walking a few steps away, leaving the room, ×, or Esc ends the conversation. ▾ minimises the box. Walk-up greetings pause during meetings, and the same person won't greet you again for 90 seconds.
 
 **Who looks where.** Whoever Michael is talking to faces him, and he faces them. Everyone else in the room glances up at him now and then for a few seconds, then goes back to work; when he leaves the room they all go back to their screens. People talking to each other in chat turn to face each other when they're nearby. Otherwise everyone faces their screen.
 
@@ -190,6 +189,48 @@ Jim wraps up with the tally and the desk view. Pam posts a report with every tak
   From chat you can also use `/meeting [topic]` and `/meeting end`. The `/portfolio` desk huddle happens in the conference room too.
 - **Changing the map:** the whole layout (rooms, walls, doors, desks, seats, props) lives in `scripts/build-scranton-iso.py`. Edit it, then run `python3 scripts/build-scranton-iso.py --preview`. That redraws the floor (day and night), the furniture atlas, the minimap and the walk grid into `public/rooms/` and `firm/scranton-floor.json`, and writes a full picture to `docs/reference/scranton-iso-preview.png`. Restart Vite afterwards so it serves the new images.
 - Want the old single room back? Open `http://localhost:3333/?classic`.
+
+### The firm's working day — inbox, project board, risk, books, alphas
+
+The staff do their jobs on the office clock, the way a trading desk runs. Three buttons in the title bar open the work: **📧 Inbox**, **📋 Board** and **📈 Desk** (Risk, Books and Alphas). New email pops up as a toast on the floor; click it to read. Whoever is doing a job shows it in a bubble on the floor ("📈 Checking market indicators…"). Esc or **✕ Floor** goes back.
+
+| Time (ET) | Who | What |
+|---|---|---|
+| 7:30 daily | Ryan | Overnight crypto note (BTC, ETH, the Digital book) |
+| 7:50 | Gabe | Systems and market-data health check. If the feed is down, a P1 ticket |
+| 8:00, then 10:30, 12:30, 14:30, 15:45 | Dwight | **Risk check.** Market indicators (S&P 500, Nasdaq, Russell 2000, VIX, Treasuries, high-yield vs. IG credit, gold, dollar, oil, bitcoin), each read against its 50- and 200-day averages, one-month move and volatility. These are scored into a **RISK-ON / NEUTRAL / RISK-OFF** regime. Each book gets a 1-day 95% VaR, vol, beta and drawdown. Breaches open tickets, and a flip to RISK-OFF sends you a hedge proposal to approve. |
+| 8:10 | Darryl | Settlement report: yesterday's trades settle T+1. Breaks become tickets, and Roy emails Darryl to ask how to chase them (you're cc'd and see the answer) |
+| 8:20 | Oscar & Karen | **Alpha report.** Six signals, each back-tested on 36 stocks: momentum, trend, 6-month high, short-term reversal, low volatility and RSI. The test is a rank information coefficient against the next month's returns. The report marks each signal ✅ use, 🔁 use reversed or ⚠️ weak, ranks today's long and avoid ideas, and saves a full HTML report under `/reports`. "Send ideas to PMs" forwards them and opens research tickets. |
+| 8:30 Mon | Robert | Investment Committee agenda |
+| 8:45 | Angela | Mandate check. Single-name concentration on every book; approve "Trim to limit" or grant a waiver |
+| 9:05 Mon/Wed/Fri | Jan | Macro note (rates, dollar, oil, gold) |
+| 9:20 | Jim | "Orders for today?" Reply in plain English, e.g. *buy $2M NVDA in the Flagship and trim TSLA in Thematic*. Each order gets a ticket; Jim works it and emails the fills, Erin logs it and Darryl settles it. |
+| 10:00 | Jim | Desk-open numbers across the books |
+| 11:45 | Kelly | What's moving (biggest moves in the universe) |
+| 13:15 | staff | Staff email each other with questions (Kevin asks Angela about cost basis, Jim asks Dwight about VaR…) and the reply arrives later |
+| 16:05 | Erin | Order log |
+| 16:15 | each PM | **End-of-day book update:** NAV, P&L, contributors, drift and risk. If a position drifts more than 3% from target, they propose a rebalance for your approval. |
+| 16:30 | Kevin | Firm P&L |
+| weekly | Toby, Holly, Andy, Pam, David | Attestations (Tue), conduct training (Wed), a client meeting with Bob Vance (Thu), the LP letter for sign-off (Fri), and month-end numbers for the board (first trading day) |
+
+- **The books** are run by the portfolio teams and marked to market from the prices:
+
+  | Book | PM | Start |
+  |---|---|---|
+  | DMC Flagship Multi-Asset | Robert, with Jim and Oscar | $250M |
+  | Scranton Income Fund | Stanley | $120M |
+  | Vance Family Office | Phyllis | $40M |
+  | Digital Assets & Algo | Ryan | $15M |
+  | Commodities & Real Assets | Meredith and Carol | $60M |
+  | ESG & Thematic | Nellie | $30M |
+
+  Approved trades change the positions. Hedges, trims and your own orders also become the PM's new target, so they won't be rebalanced away that night.
+- **Emails** can be replied to, and some carry buttons (Approve / Reject, Sign, Accept…). "Approved" or "go ahead" in a reply counts as a click. **Compose** emails anyone. They answer from the firm's real numbers (P&L, risk, their book, their tickets), and with `"llm": "claude"` they answer in character. *Needs you* collects everything waiting on you.
+- **The board** is a two-week sprint with Backlog → To Do → In Progress → Review → Done. Tickets have a priority from P0 (critical) to P3 (low), a type, an owner and comments. Staff move their own tickets every 20 office minutes during working hours. Drag a card to move it, click it to change status, priority or owner or to comment, or use **+ New ticket** to give someone work. Cards marked **You** wait on your sign-off; dragging one to Done approves it.
+- **Prices** for this work come from Yahoo's daily history (cached for 20 minutes), so the 25-a-day Alpha Vantage quota stays free for chat. If you skip the clock past today, the history is carried forward with simulated days. If the feed can't be reached, a clearly labelled **SIMULATED** stand-in is used, and every email, table and report says which it is.
+- From chat: `/risk`, `/alphas`, `/books`, `/pnl`, `/mandate`, `/settle`, `/macro`, `/buzz`, `/crypto` have that person do the job now. The 📈 Desk tabs have run buttons too.
+- Floor conversations know the work too: ask Dwight "how worried should we be?" and he quotes the latest regime.
+- All of it is kept in `~/.agent-office/operations.json`. Delete that file to start the firm fresh. The schedule lives in `server/desk/operations.js` and the maths in `server/desk/opsjobs.js`.
 
 ### Use them from Claude Code
 
